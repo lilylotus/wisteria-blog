@@ -1,0 +1,23 @@
+version: '3.8'
+
+networks:
+  redis-network:
+    driver: bridge
+
+services:
+  redis:
+    # https://download.redis.io/releases/
+    # nginx:7.4.4 / nginx:6.2.8 / nginx:8.0.2
+    image: redis:7.4.4
+    container_name: redis
+    ports:
+      - "6379:6379"
+    environment:
+      #- REDIS_PASSWORD=redis
+      TZ: "Asia/Shanghai"
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - ./data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - redis-network

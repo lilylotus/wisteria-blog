@@ -1,0 +1,27 @@
+networks:
+  rabbitmq-network:
+    driver: bridge
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.2.2-management
+    container_name: rabbitmq
+    hostname: rabbitmq-node1
+    restart: always
+    ports:
+      - "5672:5672"      # AMQP
+      - "15672:15672"    # Web UI
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbitmq
+      RABBITMQ_DEFAULT_PASS: rabbitmq
+      RABBITMQ_DEFAULT_VHOST: /
+      # Erlang cluster cookie (important)
+      RABBITMQ_ERLANG_COOKIE: "my_secret_cookie_618512cc090a990423207be5"
+    user: "999:999"
+    volumes:
+      # mkdir -p ./rabbitmq/{data,logs,plugins,conf}
+      # chown -R 999:999 ./rabbitmq
+      - ./rabbitmq/data:/var/lib/rabbitmq
+      - ./rabbitmq/logs:/var/log/rabbitmq
+    networks:
+      - rabbitmq-network

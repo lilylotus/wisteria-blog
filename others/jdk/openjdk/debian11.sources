@@ -1,0 +1,11 @@
+Types: deb
+URIs: http://mirrors.ustc.edu.cn/debian
+Suites: bullseye bullseye-updates
+Components: main contrib non-free
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: http://mirrors.ustc.edu.cn/debian-security
+Suites: bullseye-security
+Components: main contrib non-free
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg

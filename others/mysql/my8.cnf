@@ -1,0 +1,14 @@
+[mysqld]
+character-set-server = utf8mb4
+# utf8mb4_0900_ai_ci (基于Unicode 9.0，大小写不敏感，重音不敏感)
+# utf8mb4_0900_as_cs (大小写和重音敏感)
+collation-server = utf8mb4_0900_ai_ci
+init-connect='SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci'
+# 忽略大小写，默认为 0 表名区分大小写
+lower-case-table-names=0
+
+[client]
+default-character-set = utf8mb4
+
+[mysql]
+default-character-set = utf8mb4

@@ -1,0 +1,47 @@
+version: '3.8'
+
+networks:
+  mysql-network:
+    driver: bridge
+
+services:
+  mysql8:
+    #image: mysql:8.0.42-bookworm
+    image: mysql:8.4.6
+    container_name: mysql8
+    environment:
+      MYSQL_ROOT_PASSWORD: mysql
+      MYSQL_DATABASE: test
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pmysql"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    ports:
+      - "13306:3306"
+    volumes:
+      - ./mysql8/data/:/var/lib/mysql/
+      - ./mysql8/conf/my.cnf:/etc/mysql/conf.d/my.cnf
+    networks:
+      - mysql-network
+  
+  mysql57:
+    image: mysql:5.7.44
+    container_name: mysql57
+    environment:
+      MYSQL_ROOT_PASSWORD: mysql
+      MYSQL_DATABASE: test
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pmysql"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    ports:
+      - "23306:3306"
+    volumes:
+      - ./mysql57/data/:/var/lib/mysql/
+      - ./mysql57/conf/my.cnf:/etc/mysql/conf.d/my.cnf
+    networks:
+      - mysql-network

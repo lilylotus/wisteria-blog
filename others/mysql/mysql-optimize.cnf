@@ -1,0 +1,42 @@
+[mysqld]
+basedir = /data/mysql
+datadir = /data/mysql/data
+socket = /tmp/mysql.sock
+log-error = /var/log/mysql.log
+log-bin = /data/binlog/mysql-bin
+binlog-format = row
+skip-name-resolve
+server-id = 52
+gtid-mode = on
+enforce-gtid-consistency = true
+log-slave-updates = 1
+relay-log-purge = 0
+
+max-connections = 1024
+back-log = 128
+wait-timeout = 60
+interactive-timeout = 7200
+key-buffer-size = 16M
+query-cache-size = 64M
+query-cache-type = 1
+query-cache-limit = 50M
+max-connect-errors = 20
+sort-buffer-size = 2M
+max-allowed-packet = 32M
+join-buffer-size = 2M
+thread-cache-size = 200
+innodb-buffer-pool-size = 1024M
+innodb-flush-log-at-trx-commit = 1
+innodb-log-buffer-size = 32M
+innodb-log-file-size = 128M
+innodb-log-files-in-group = 3
+binlog-cache-size = 2M
+max-binlog-cache-size = 8M
+max-binlog-size = 512M
+expire-logs-days = 7
+read-buffer-size = 2M
+read-rnd-buffer-size = 2M
+bulk-insert-buffer-size = 8M
+
+[client]
+socket = /tmp/mysql.sock

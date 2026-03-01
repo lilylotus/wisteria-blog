@@ -1,0 +1,22 @@
+FROM eclipse-temurin:8-jdk-jammy
+
+# ubuntu 24.04 (Noble) ; ubuntu 22.04 (Jammy) ; ubuntu 20.04 (Focal) ; ubuntu 18.04 (Bionic)
+# eclipse-temurin:17-jdk-noble / eclipse-temurin:17-jdk-jammy /
+
+# jdk8 -> 1.8.0_462
+
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends curl vim iputils-ping locales procps htop telnet tzdata \
+    && sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/ ; s/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \
+    && locale-gen \
+    && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV TERM=xterm
+ENV TZ=Asia/Shanghai
+ENV LANG=en_US.UTF-8
+
+WORKDIR /opt/
+
+CMD ["java", "-version"]

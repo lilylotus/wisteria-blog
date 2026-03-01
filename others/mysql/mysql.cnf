@@ -1,0 +1,50 @@
+# master
+[mysqld]
+# Binlog配置
+log-bin = mysql-bin
+server-id = 1
+binlog-format = ROW
+binlog-row-image = MINIMAL
+
+# 组提交优化
+binlog_group_commit_sync_delay = 1000
+binlog_group_commit_sync_no_delay_count = 100
+sync_binlog = 1
+
+# 事务日志优化
+innodb_flush_log_at_trx_commit = 1
+innodb_log_file_size = 1G
+innodb_log_files_in_group = 3
+
+# slave
+[mysqld]
+# 基础配置
+server-id = 2
+read_only = ON
+super_read_only = ON
+
+# 并行复制核心参数
+slave_parallel_type = LOGICAL_CLOCK
+slave_parallel_workers = 16
+slave_preserve_commit_order = ON
+
+# 性能优化参数
+slave_checkpoint_period = 300
+slave_checkpoint_group = 512
+slave_pending_jobs_size_max = 134217728
+
+# Relay Log优化
+relay_log_recovery = ON
+relay_log_info_repository = TABLE
+master_info_repository = TABLE
+
+
+# 关键监控指标
+-- 实时监控延迟
+SHOW SLAVE STATUS\G
+
+-- 查看并行工作线程状态
+SELECT * FROM performance_schema.replication_applier_status_by_worker;
+
+-- 监控组提交效果
+SHOW STATUS LIKE 'Binlog_group_commits';

@@ -1,0 +1,32 @@
+version: '3.8'
+
+networks:
+  nacos-network:
+    driver: bridge
+
+services:
+  nacos:
+    image: nacos/nacos-server:v2.5.1
+    container_name: nacos
+    ports:
+      - "8848:8848"
+      - "9848:9848" # RPC端口(2.0+版本需要)
+    environment:
+      # accessToken: default_token
+      MODE: "standalone"
+      NACOS_AUTH_ENABLE: "false"
+      JVM_XMS: 512m
+      JVM_XMX: 512m
+      JVM_XMN: 300m
+      # the length of secret key must great than or equal 32 bytes; And the secret key must be encoded by base64
+      # abcdef1234567890abcdef1234567890
+      NACOS_AUTH_TOKEN: "YWJjZGVmMTIzNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTAK"
+      NACOS_AUTH_IDENTITY_KEY: "nacos"
+      NACOS_AUTH_IDENTITY_VALUE: "nacos"
+    volumes:
+      # mkdir -p ./nacos/{data,logs,plugins}
+      - ./nacos/data:/home/nacos/data
+      - ./nacos/logs:/home/nacos/logs
+      - ./nacos/plugins:/home/nacos/plugins
+    networks:
+      - nacos-network

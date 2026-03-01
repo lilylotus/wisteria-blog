@@ -1,0 +1,25 @@
+pipeline {
+    agent {
+        // install jenkins plugins (Docker Pipeline)
+        docker {
+            image 'gradle:6.9.2-jdk8'  // 使用官方 Gradle 镜像
+            args '-u root -v /home/jenkins/.gradle:/home/gradle/.gradle'  // 挂载 Gradle 缓存
+        }
+    }
+    stages {
+        stage('Build') {
+            steps {
+                // https://www.jenkins.io/doc/book/pipeline/jenkinsfile/#using-environment-variables
+                // checkout scmGit(branches: [[name: 'refs/heads/standard_master']], extensions: [], userRemoteConfigs: [[credentialsId: 'git', url: 'http://ip/xxx/project.git']])
+                sh '''
+                    echo "The current build number [${BUILD_NUMBER}]"
+                    echo "The absolute path of the workspace [${WORKSPACE}]"
+                    ls -a
+                    gradle --version
+                    gradle clean bootJar -x test --info
+                    ls -la build/libs/
+                '''
+            }
+        }
+    }
+}

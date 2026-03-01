@@ -1,0 +1,14 @@
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: nfs-test-pvc
+  annotations:
+    # not required, depending on whether this annotation was shown in the storage class description
+    nfs.io/storage-path: "nfs-test-pvc"
+spec:
+  storageClassName: nfs-sc-client
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Mi
