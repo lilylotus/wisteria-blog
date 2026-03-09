@@ -11,7 +11,7 @@ tags: ["Linux", "Debian"]
 categories: ["Linux"]
 series: []
 
-featuredImage: "https://www.nihility.cn/files/images/IMG_2488.JPG"
+featuredImage: "https://www.nihility.cn/files/images/IMG_2630.JPG"
 featuredImagePreview: ""
 
 lightgallery: true
@@ -153,10 +153,18 @@ systemctl restart isc-dhcp-server
 #### 安装 Nginx 服务
 
 ```bash
-apt-get install -y nginx
+apt-get install -y nginx squashfs-tools
 ```
 
 #### Nginx 配置
+
+```
+mkdir -p /srv/www/{preseed,debian12,debian13}
+```
+
+[debian12.13.0 网络安装 ISO 下载链接](https://cdimage.debian.org/cdimage/archive/12.13.0/amd64/iso-cd/debian-12.13.0-amd64-netinst.iso)
+
+[debian13.2.0 网络安装 ISO 下载链接](https://cdimage.debian.org/cdimage/archive/13.2.0/amd64/iso-cd/debian-13.2.0-amd64-netinst.iso)
 
 ```bash
 cat > /etc/nginx/conf.d/debian-pxe.conf << EOF
@@ -169,17 +177,32 @@ server {
     # Preseed配置文件
     location /preseed {
         alias /srv/www/preseed;
-        default_type text/plain;
-    }
-    
-    # Debian安装文件
-    location /debian12 {
-        alias /srv/www/debian12;
         autoindex on;
     }
     
-    location /debian13 {
-        alias /srv/www/debian13;
+    # Debian 12 (bookworm)
+    location /debian12/ {
+        alias /srv/www/debian12/;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+    }
+	# === dists 和 pool 路径（解决安装程序的路径请求） ===
+    # dists/stable -> bookworm/dists
+    location /debian12/dists/stable/ {
+        alias /srv/www/debian12/dists/bookworm/;
+        autoindex on;
+    }
+    
+    # Debian 13 (trixie)
+    location /debian13/ {
+        alias /srv/www/debian13/;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+    }
+    location /debian13/dists/stable/ {
+        alias /srv/www/debian13/dists/bookworm/;
         autoindex on;
     }
     
@@ -257,6 +280,12 @@ chown -R tftp:tftp /srv/tftp
 cd /srv/tftp/debian
 wget http://mirrors.ustc.edu.cn/debian/dists/stable/main/installer-amd64/current/images/netboot/netboot.tar.gz
 tar -xzf netboot.tar.gz
+
+# debian 12 - bookworm
+wget https://mirrors.ustc.edu.cn/debian/dists/bookworm/main/installer-amd64/current/images/netboot/netboot.tar.gz
+
+# debian 13 - trixie
+wget https://mirrors.ustc.edu.cn/debian/dists/trixie/main/installer-amd64/current/images/netboot/netboot.tar.gz
 ```
 
 ##### BIOS 模式
@@ -266,12 +295,13 @@ bios 目录下放置 Legacy BIOS 启动文件
 ```bash
 cp /srv/tftp/debian/{pxelinux.0,ldlinux.c32,splash.png} /srv/tftp/bios/
 cp /srv/tftp/debian/debian-installer/amd64/boot-screens/{vesamenu.c32,libcom32.c32,libutil.c32} /srv/tftp/bios/
+
+mkdir -p /srv/tftp/bios/debian13
+# default -> debian12
 cp /srv/tftp/debian/debian-installer/amd64/{linux,initrd.gz} /srv/tftp/bios/
 
 mkdir -p /srv/tftp/bios/pxelinux.cfg
 touch /srv/tftp/bios/pxelinux.cfg/default
-
-mkdir -p /srv/tftp/bios/preseed
 ```
 
 `bios/pxelinux.cfg/default` 文件内容
@@ -306,9 +336,14 @@ LABEL local
 
 ## Debian preseed 文件配置
 
-### Debian 12 BIOS 模式 preseed 文件
+### BIOS 模式 preseed 文件
+
+#### Debian 12
+
+`/srv/www/preseed/preseed-debian12-bios.cfg` 配置文件编辑
 
 ```
+# vim /srv/www/preseed/preseed-debian12-bios.cfg
 # 设置非交互模式和关键优先级
 d-i debconf debconf/priority select critical
 d-i debconf debconf/frontend select noninteractive
@@ -341,12 +376,32 @@ d-i netcfg/wireless_show_essids select manual
 # ==================== 镜像源设置 ====================
 d-i mirror/protocol string http
 d-i mirror/country string manual
-# d-i mirror/http/hostname string deb.debian.org
-d-i mirror/http/hostname string 192.168.99.30
-d-i mirror/http/port string 8080
-d-i mirror/http/directory string /debian12
+d-i mirror/http/hostname string 10.10.10.30:8080
+d-i mirror/http/directory string /debian12/
 d-i mirror/http/proxy string
-d-i mirror/suite string stable
+# -> http://10.10.10.30:8080/debian12/dists/stable/Release
+
+# 跳过镜像选择对话框
+d-i mirror/skip-question boolean true
+# 强制使用手动配置的镜像
+d-i mirror/choose_manual_mirror boolean true
+d-i mirror/http/mirror string http://10.10.10.30:8080/debian12/
+
+# === 跳过镜像相关所有问题 ===
+d-i apt-setup/use_mirror boolean true
+d-i apt-setup/enable-source-repositories boolean false
+d-i apt-setup/non-free boolean false
+d-i apt-setup/contrib boolean false
+
+#d-i mirror/country string manual
+#d-i mirror/http/hostname string deb.debian.org
+#d-i mirror/http/hostname string mirrors.ustc.edu.cn
+#d-i mirror/http/directory string /debian/
+#d-i mirror/http/proxy string
+
+# 指定 Debian 版本为 13 (trixie) / 12 (bookworm)
+d-i mirror/suite string bookworm
+#d-i mirror/suite string trixie
 
 # ==================== 时区和时钟 ====================
 d-i clock-setup/utc boolean true
@@ -355,43 +410,15 @@ d-i clock-setup/ntp boolean true
 d-i clock-setup/ntp-server string ntp.aliyun.com
 
 # 分区
-# 强制使用GPT（UEFI）或MSDOS（BIOS） gpt / msdos
-d-i partman/default_filesystem string xfs
-
-# 安装xfsprogs包
-d-i pkgsel/include string xfsprogs
-
-# 分区方法选择LVM
 d-i partman-auto/method string lvm
+# 选择要分区的磁盘
 d-i partman-auto/disk string /dev/sda
+# 使用整个磁盘
 d-i partman-auto-lvm/guided_size string max
-
-# LVM卷组名称
-d-i partman-auto-lvm/new_vg_name string vg_system
-
-# 确认LVM分区
-d-i partman-lvm/confirm boolean true
-d-i partman-lvm/confirm_nooverwrite boolean true
-d-i partman-lvm/device_remove_lvm boolean true
-
-# 删除原有分区
-d-i partman-md/device_remove_md boolean true
-d-i partman-auto/purge_lvm_from_device boolean true
-
-# 始终创建新分区表
-d-i partman-partitioning/new_label boolean true
+# 使用 XFS 文件系统（默认）
+d-i partman/default_filesystem string xfs
+# 使用 MSDOS 分区表格式（MBR）
 d-i partman-partitioning/choose_label string msdos
-
-# 确认分区
-d-i partman-partitioning/confirm_write_new_label boolean true
-d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
-
-# This makes partman automatically partition without confirmation.
-d-i partman-md/confirm boolean true
-d-i partman/active_partition_warn boolean false
-d-i partman-auto/confirm boolean true
 
 # 自定义服务器分区
 # 分区方案名称 :: \
@@ -401,38 +428,36 @@ d-i partman-auto/confirm boolean true
 #         使用文件系统{ } 文件系统{ 文件系统类型 } \
 #         挂载点{ 挂载点 } \
 #     . \
+# 自定义分区方案：boot 500MB, swap 2GB, / 剩余全部
 d-i partman-auto/expert_recipe string \
-    lvm-xfs-server :: \
-    # /boot 分区 (ext4，不能使用 XFS 作为 /boot)
-    1024 1 1024 ext4 \
-        $primary{ } $bootable{ } \
-        method{ format } format{ } \
-        use_filesystem{ } filesystem{ ext4 } \
-        mountpoint{ /boot } \
-    . \
-    # LVM物理卷（使用剩余所有空间）
-    100% 2000 -1 lvm \
-        $defaultignore{ } \
-        $lvmok{ } \
-        method{ lvm } \
-        vg_name{ vg_system } \
-    . \
-    # Swap分区 (2GB)
-    2048 1024 2048 linux-swap \
-        $lvmok{ } \
-        in_vg{ vg_system } \
-        lv_name{ lv_swap } \
-        method{ swap } format{ } \
-    . \
-    # 根分区 / 剩余空间 (XFS)
-    10240 1024 -1 xfs \
-        $lvmok{ } \
-        in_vg{ vg_system } \
-        lv_name{ lv_root } \
-        method{ format } format{ } \
-        use_filesystem{ } filesystem{ xfs } \
-        mountpoint{ / } \
-    . \
+    lvm :: \
+        500 500 500 ext4 \
+            $primary{ } $bootable{ } \
+            method{ format } format{ } \
+            use_filesystem{ } filesystem{ ext4 } \
+            mountpoint{ /boot } \
+        . \
+        2048 2048 2048 linux-swap \
+            $lvmok{ } \
+            method{ swap } format{ } \
+        . \
+        100% 100% 100% xfs \
+            $lvmok{ } \
+            method{ format } format{ } \
+            use_filesystem{ } filesystem{ xfs } \
+            mountpoint{ / } \
+        .
+
+# 删除现有分区和 LVM
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+d-i partman-lvm/confirm boolean true
+
+# 清空磁盘分区表
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/confirm_nooverwrite boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
 
 # ==================== 用户账户 ====================
 # Root用户
@@ -441,11 +466,11 @@ d-i passwd/root-password password luck
 d-i passwd/root-password-again password luck
 
 # 普通用户（可选）
-d-i passwd/make-user boolean false
 d-i passwd/user-fullname string luck
 d-i passwd/username string luck
 d-i passwd/user-password password luck
 d-i passwd/user-password-again password luck
+d-i passwd/user-uid string 1000
 
 # ==================== 软件包安装 ====================
 # 禁用流行度调查
@@ -455,7 +480,7 @@ d-i apt-setup/security_host string security.debian.org
 
 # 软件包选择
 tasksel tasksel/first multiselect standard, ssh-server
-d-i pkgsel/include string openssh-server vim net-tools curl wget
+d-i pkgsel/include string openssh-server vim curl wget sudo net-tools
 d-i pkgsel/upgrade select full-upgrade
 d-i pkgsel/update-policy select none
 d-i pkgsel/updatedb boolean true
@@ -463,19 +488,83 @@ d-i pkgsel/updatedb boolean true
 # ==================== GRUB引导器 ====================
 d-i grub-installer/only_debian boolean true
 d-i grub-installer/with_other_os boolean true
-d-i grub-installer/bootdev string default
-d-i grub-installer/skip boolean false
+d-i grub-installer/bootdev string /dev/sda
 
 # ==================== 完成安装 ====================
-d-i finish-install/keep-consoles boolean true
 d-i finish-install/reboot_in_progress note
-d-i cdrom-detect/eject boolean false
-d-i debian-installer/exit/poweroff boolean false
-d-i debian-installer/exit/halt boolean false
-d-i debian-installer/exit/ask boolean false
+d-i cdrom-detect/eject boolean true
+
+# === 跳过所有交互 ===
+# 不显示任何问题
+d-i debian-installer/quiet boolean true
+d-i debian-installer/splash boolean false
+# 关闭所有弹窗和交互
+d-i mirror/suite string stable
 ```
 
 ### Debian 12 EFI 模式 preseed 文件
 
 ```
+# === 分区配置（EFI + GPT + LVM + XFS） ===
+# 使用 GPT 分区表（EFI 必需）
+d-i partman-partitioning/choose_label select gpt
+d-i partman-partitioning/default_label select gpt
+
+# 自动分区
+d-i partman-auto/method string lvm
+d-i partman-auto/disk string /dev/sda
+
+# 自定义分区方案：EFI ESP + LVM
+d-i partman-auto/expert_recipe string \
+    efi-lvm :: \
+        # EFI 系统分区（ESP）- 300MB
+        300 300 300 vfat \
+            $primary{ } $bootable{ } \
+            method{ format } format{ } \
+            use_filesystem{ } filesystem{ vfat } \
+            mountpoint{ /boot/efi } \
+            options{ fat=32 } \
+            label{ efi } \
+        . \
+        # /boot 分区 - 500MB（物理分区，不在 LVM 中）
+        500 500 500 ext4 \
+            $primary{ } \
+            method{ format } format{ } \
+            use_filesystem{ } filesystem{ ext4 } \
+            mountpoint{ /boot } \
+            label{ boot } \
+        . \
+        # Swap 分区 - 2GB（LVM 逻辑卷）
+        2048 2048 2048 linux-swap \
+            $lvmok{ } \
+            in_vg{ debian-vg } \
+            lv_name{ swap } \
+            method{ swap } format{ } \
+        . \
+        # 根分区 - 剩余全部（LVM 逻辑卷）
+        100% 100% 100% xfs \
+            $lvmok{ } \
+            in_vg{ debian-vg } \
+            lv_name{ root } \
+            method{ format } format{ } \
+            use_filesystem{ } filesystem{ xfs } \
+            mountpoint{ / } \
+            label{ root } \
+        .
+
+# 分区管理
+d-i partman-auto-lvm/guided_size string max
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+
+# === 引导加载器配置（EFI GRUB） ===
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/with_other_os boolean true
+d-i grub-installer/bootdev string /dev/sda
+d-i grub-installer/force-efi-extra-removable boolean true
+d-i grub-installer/efi-installation-entries boolean true
 ```
