@@ -352,6 +352,10 @@ menuentry "Automated Debian 13 Install" {
   linux /debian-installer/amd64/linux auto=true priority=critical url=http://10.10.10.30:8080/preseed/preseed-debian13-efi.cfg
   initrd /debian-installer/amd64/initrd.gz
 }
+
+menuentry "Boot from local hard disk (default EFI)" {
+    exit
+}
 ```
 
 ## Debian preseed 文件配置
