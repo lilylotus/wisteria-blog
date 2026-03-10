@@ -93,11 +93,11 @@ INTERFACESv6=""
 
 ```bash
 # 查看 isc-dhcp-server 服务的所有日志
-sudo journalctl -u isc-dhcp-server
+journalctl -u isc-dhcp-server
 # 实时滚动查看最新日志（类似 tail -f）
-sudo journalctl -u isc-dhcp-server -f
+journalctl -u isc-dhcp-server -f
 # 查看最后 50 行日志
-sudo journalctl -u isc-dhcp-server -n 50
+journalctl -u isc-dhcp-server -n 50
 # 配置文件语法检查
 dhcpd -t
 ```
@@ -332,6 +332,80 @@ LABEL local
 
 ##### EFI 模式
 
+```bash
+cp /srv/tftp/debian/debian-installer/amd64/bootnetx64.efi /srv/tftp/efi/bootx64.efi
+cp /srv/tftp/debian/debian-installer/amd64/grubx64.efi /srv/tftp/efi/
+
+cp /srv/tftp/debian/debian-installer/amd64/{linux,initrd.gz} /srv/tftp/efi/
+
+
+```
+
+`grub.cfg`  GRUB 配置文件
+
+```
+cat > /srv/tftp/efi/grub.cfg << EOF
+set timeout=30
+set default=0
+
+# 加载图形终端
+insmod efi_gop
+insmod efi_uga
+insmod gfxterm
+terminal_input console
+terminal_output gfxterm
+
+# 设置分辨率
+set gfxmode=auto
+set gfxpayload=keep
+
+# 主菜单
+menuentry "Install Debian 12 (UEFI) - Automated" {
+    echo "Loading kernel..."
+    linux /debian-installer/amd64/linux \
+        auto=true \
+        priority=critical \
+        url=http://192.168.1.10/preseed.cfg \
+        interface=auto \
+        video=vesa:ywrap,mtrr \
+        vga=788 \
+        quiet
+    echo "Loading initrd..."
+    initrd /debian-installer/amd64/initrd.gz
+}
+
+menuentry "Install Debian 12 (UEFI) - Manual" {
+    linux /debian-installer/amd64/linux vga=788
+    initrd /debian-installer/amd64/initrd.gz
+}
+
+menuentry "Install Debian 12 (UEFI) - Expert Mode" {
+    linux /debian-installer/amd64/linux priority=low vga=788
+    initrd /debian-installer/amd64/initrd.gz
+}
+
+menuentry "Debian 12 Rescue Mode" {
+    linux /debian-installer/amd64/linux rescue/enable=true vga=788
+    initrd /debian-installer/amd64/initrd.gz
+}
+
+menuentry "Install Debian 12 (UEFI) - Graphical Install" {
+    linux /debian-installer/amd64/linux \
+        auto=true \
+        priority=critical \
+        url=http://192.168.1.10/preseed.cfg \
+        video=vesa:ywrap,mtrr \
+        vga=788
+    initrd /debian-installer/amd64/initrd.gz
+}
+
+menuentry "Boot from local disk" {
+    exit
+}
+EOF
+
+```
+
 
 
 ## Debian preseed 文件配置
@@ -374,30 +448,21 @@ d-i netcfg/get_domain string localdomain
 d-i netcfg/wireless_show_essids select manual
 
 # ==================== 镜像源设置 ====================
-d-i mirror/protocol string http
-d-i mirror/country string manual
-d-i mirror/http/hostname string 10.10.10.30:8080
-d-i mirror/http/directory string /debian12/
-d-i mirror/http/proxy string
+#d-i mirror/protocol string http
+#d-i mirror/country string manual
+#d-i mirror/http/hostname string 10.10.10.30:8080
+#d-i mirror/http/directory string /debian12/
+#d-i mirror/http/proxy string
 # -> http://10.10.10.30:8080/debian12/dists/stable/Release
 
 # 跳过镜像选择对话框
 d-i mirror/skip-question boolean true
-# 强制使用手动配置的镜像
-d-i mirror/choose_manual_mirror boolean true
-d-i mirror/http/mirror string http://10.10.10.30:8080/debian12/
 
-# === 跳过镜像相关所有问题 ===
-d-i apt-setup/use_mirror boolean true
-d-i apt-setup/enable-source-repositories boolean false
-d-i apt-setup/non-free boolean false
-d-i apt-setup/contrib boolean false
-
-#d-i mirror/country string manual
-#d-i mirror/http/hostname string deb.debian.org
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
 #d-i mirror/http/hostname string mirrors.ustc.edu.cn
-#d-i mirror/http/directory string /debian/
-#d-i mirror/http/proxy string
+d-i mirror/http/directory string /debian/
+d-i mirror/http/proxy string
 
 # 指定 Debian 版本为 13 (trixie) / 12 (bookworm)
 d-i mirror/suite string bookworm
@@ -493,13 +558,154 @@ d-i grub-installer/bootdev string /dev/sda
 # ==================== 完成安装 ====================
 d-i finish-install/reboot_in_progress note
 d-i cdrom-detect/eject boolean true
+```
 
-# === 跳过所有交互 ===
-# 不显示任何问题
-d-i debian-installer/quiet boolean true
-d-i debian-installer/splash boolean false
-# 关闭所有弹窗和交互
-d-i mirror/suite string stable
+#### Debian 13
+
+`/srv/www/preseed/preseed-debian13-bios.cfg` 配置文件编辑
+
+```
+# vim /srv/www/preseed/preseed-debian13-bios.cfg
+# 设置非交互模式和关键优先级
+d-i debconf debconf/priority select critical
+d-i debconf debconf/frontend select noninteractive
+
+# ==================== 禁用CD-ROM检测 ====================
+d-i cdrom-detect/cdrom_mounted boolean true
+d-i cdrom-detect/try-hd boolean true
+d-i cdrom-detect/hd-mount boolean true
+d-i apt-setup/cdrom/set-first boolean false
+d-i apt-setup/cdrom/set-double boolean false
+d-i apt-setup/cdrom/set-failed boolean false
+
+# ==================== 本地化设置 ====================
+d-i debian-installer/language string en
+d-i debian-installer/country string CN
+d-i debian-installer/locale string en_US.UTF-8
+d-i localechooser/supported-locales multiselect en_US.UTF-8, zh_CN.UTF-8
+
+# 键盘布局
+d-i keyboard-configuration/xkb-keymap select us
+d-i keyboard-configuration/variant select us
+
+# ==================== 网络设置 ====================
+d-i netcfg/choose_interface select auto
+d-i netcfg/dhcp_timeout string 60
+d-i netcfg/get_hostname string debian
+d-i netcfg/get_domain string localdomain
+d-i netcfg/wireless_show_essids select manual
+
+# ==================== 镜像源设置 ====================
+#d-i mirror/protocol string http
+#d-i mirror/country string manual
+#d-i mirror/http/hostname string 10.10.10.30:8080
+#d-i mirror/http/directory string /debian12/
+#d-i mirror/http/proxy string
+# -> http://10.10.10.30:8080/debian12/dists/stable/Release
+
+# 跳过镜像选择对话框
+d-i mirror/skip-question boolean true
+
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+#d-i mirror/http/hostname string mirrors.ustc.edu.cn
+d-i mirror/http/directory string /debian/
+d-i mirror/http/proxy string
+
+# 指定 Debian 版本为 13 (trixie) / 12 (bookworm)
+#d-i mirror/suite string bookworm
+d-i mirror/suite string trixie
+
+# ==================== 时区和时钟 ====================
+d-i clock-setup/utc boolean true
+d-i time/zone string Asia/Shanghai
+d-i clock-setup/ntp boolean true
+d-i clock-setup/ntp-server string ntp.aliyun.com
+
+# 分区
+d-i partman-auto/method string lvm
+# 选择要分区的磁盘
+d-i partman-auto/disk string /dev/sda
+# 使用整个磁盘
+d-i partman-auto-lvm/guided_size string max
+# 使用 XFS 文件系统（默认）
+d-i partman/default_filesystem string xfs
+# 使用 MSDOS 分区表格式（MBR）
+d-i partman-partitioning/choose_label string msdos
+
+# 自定义服务器分区
+# 分区方案名称 :: \
+#     最小大小 优先大小 最大大小 文件系统类型 \
+#         标志{ } \
+#         方法{ 方法 } 格式化{ } \
+#         使用文件系统{ } 文件系统{ 文件系统类型 } \
+#         挂载点{ 挂载点 } \
+#     . \
+# 自定义分区方案：boot 500MB, swap 2GB, / 剩余全部
+d-i partman-auto/expert_recipe string \
+    lvm :: \
+        500 500 500 ext4 \
+            $primary{ } $bootable{ } \
+            method{ format } format{ } \
+            use_filesystem{ } filesystem{ ext4 } \
+            mountpoint{ /boot } \
+        . \
+        2048 2048 2048 linux-swap \
+            $lvmok{ } \
+            method{ swap } format{ } \
+        . \
+        100% 100% 100% xfs \
+            $lvmok{ } \
+            method{ format } format{ } \
+            use_filesystem{ } filesystem{ xfs } \
+            mountpoint{ / } \
+        .
+
+# 删除现有分区和 LVM
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+d-i partman-lvm/confirm boolean true
+
+# 清空磁盘分区表
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/confirm_nooverwrite boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+
+# ==================== 用户账户 ====================
+# Root用户
+d-i passwd/root-login boolean true
+d-i passwd/root-password password luck
+d-i passwd/root-password-again password luck
+
+# 普通用户（可选）
+d-i passwd/user-fullname string luck
+d-i passwd/username string luck
+d-i passwd/user-password password luck
+d-i passwd/user-password-again password luck
+d-i passwd/user-uid string 1000
+
+# ==================== 软件包安装 ====================
+# 禁用流行度调查
+popularity-contest popularity-contest/participate boolean false
+d-i apt-setup/services-select multiselect security, updates
+d-i apt-setup/security_host string security.debian.org
+
+# 软件包选择
+tasksel tasksel/first multiselect standard, ssh-server
+d-i pkgsel/include string openssh-server vim curl wget sudo net-tools
+d-i pkgsel/upgrade select full-upgrade
+d-i pkgsel/update-policy select none
+d-i pkgsel/updatedb boolean true
+
+# ==================== GRUB引导器 ====================
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/with_other_os boolean true
+d-i grub-installer/bootdev string /dev/sda
+
+# ==================== 完成安装 ====================
+d-i finish-install/reboot_in_progress note
+d-i cdrom-detect/eject boolean true
 ```
 
 ### Debian 12 EFI 模式 preseed 文件
