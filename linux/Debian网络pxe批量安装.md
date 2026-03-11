@@ -705,8 +705,8 @@ d-i netcfg/wireless_show_essids select manual
 d-i mirror/skip-question boolean true
 
 d-i mirror/country string manual
-#d-i mirror/http/hostname string deb.debian.org
-d-i mirror/http/hostname string mirrors.ustc.edu.cn
+d-i mirror/http/hostname string deb.debian.org
+#d-i mirror/http/hostname string mirrors.ustc.edu.cn
 d-i mirror/http/directory string /debian
 d-i mirror/http/proxy string
 
@@ -815,7 +815,7 @@ d-i cdrom-detect/eject boolean true
 #### Debian 13
 
 ```
-# vim /srv/www/preseed/preseed-debian12-efi.cfg
+# vim /srv/www/preseed/preseed-debian13-efi.cfg
 # 设置非交互模式和关键优先级
 d-i debconf debconf/priority select critical
 d-i debconf debconf/frontend select noninteractive
@@ -857,8 +857,8 @@ d-i netcfg/wireless_show_essids select manual
 d-i mirror/skip-question boolean true
 
 d-i mirror/country string manual
-#d-i mirror/http/hostname string deb.debian.org
-d-i mirror/http/hostname string mirrors.ustc.edu.cn
+d-i mirror/http/hostname string deb.debian.org
+#d-i mirror/http/hostname string mirrors.ustc.edu.cn
 d-i mirror/http/directory string /debian
 d-i mirror/http/proxy string
 
