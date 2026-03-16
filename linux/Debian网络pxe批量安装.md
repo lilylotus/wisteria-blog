@@ -963,3 +963,209 @@ d-i grub-installer/bootdev string /dev/sda
 d-i finish-install/reboot_in_progress note
 d-i cdrom-detect/eject boolean true
 ```
+
+### 安装完成系统优化
+
+#### 安装完成后执行脚本
+
+```
+# 安装完成后执行的命令（包含服务器优化脚本自动执行）
+d-i preseed/late_command string \
+    in-target usermod -aG sudo luck; \
+    in-target systemctl enable ssh; \
+    in-target mkdir -p /root/scripts; \
+    in-target curl -fsSL http://192.168.99.30:8080/preseed/optimize-server-pxe.sh -o /root/scripts/optimize-server-pxe.sh || echo "优化脚本下载失败，请手动执行"; \
+    in-target chmod +x /root/scripts/optimize-server-pxe.sh; \
+    in-target bash /root/scripts/optimize-server-pxe.sh;
+    
+# /target 标识在安装的系统内部
+#    echo "安装完成！" > /target/etc/motd; \  
+#    echo "正在配置服务器优化脚本..." >> /target/etc/motd; \
+```
+
+#### 系统参数优化
+
+`server-optimization.sh`
+
+```bash
+#!/bin/bash
+
+# vim server-optimization.sh
+LOG_FILE="/var/log/server-optimization.log"
+
+# 内核参数优化
+echo "1. 内核/etc/modules-load.d/server-optimization.conf参数优化" | tee -a "$LOG_FILE"
+
+cat > /etc/modules-load.d/server-optimization.conf << 'EOF'
+# Kubernetes 必需模块
+br_netfilter
+overlay
+
+# 网络相关
+ip_vs
+ip_vs_rr
+ip_vs_wrr
+ip_vs_sh
+nf_conntrack
+EOF
+
+# 立即加载模块
+modprobe br_netfilter 2> /dev/null
+modprobe overlay 2> /dev/null
+modprobe ip_vs 2> /dev/null
+
+echo "2. /etc/sysctl.d/server-optimization.conf参数优化" | tee -a "$LOG_FILE"
+# Kubernetes 专用内核参数
+cat > /etc/sysctl.d/server-optimization.conf << 'EOF'
+# ============ Kubernetes 必需参数 ============
+# 启用 iptables 对 bridge 的处理（Kubernetes 必需）
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+# 启用 IP 转发（Kubernetes 必需）
+net.ipv4.ip_forward = 1
+# 不限制用户命名空间
+user.max_user_namespaces = 15000
+EOF
+
+sysctl -p /etc/sysctl.d/server-optimization.conf
+
+echo "3. 禁用 Swap" | tee -a "$LOG_FILE"
+# 禁用 Swap（Kubernetes 必需）
+swapoff -a
+sed -i '/swap/s/^/#/' /etc/fstab
+
+echo "4. /etc/security/limits.d/server-optimization.conf参数优化" | tee -a "$LOG_FILE"
+cat > /etc/security/limits.d/server-optimization.conf << 'EOF'
+# 所有用户的文件描述符限制
+* soft nofile 1048576
+* hard nofile 1048576
+
+# 所有用户的进程数限制
+* soft nproc 1048576
+* hard nproc 1048576
+EOF
+
+echo "5. SSH优化" | tee -a "$LOG_FILE"
+# 禁止 root 密码登录（允许密钥登录）
+sed -i 's/^#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+# 限制登录尝试
+sed -i 's/^#MaxAuthTries.*/MaxAuthTries 3/' /etc/ssh/sshd_config
+sed -i 's/^MaxAuthTries.*/MaxAuthTries 3/' /etc/ssh/sshd_config
+# 禁用空密码
+sed -i 's/^#PermitEmptyPasswords.*/PermitEmptyPasswords no/' /etc/ssh/sshd_config
+sed -i 's/^PermitEmptyPasswords.*/PermitEmptyPasswords no/' /etc/ssh/sshd_config
+sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+# 启用密钥认证
+sed -i 's/^#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+sed -i 's/^PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+
+echo "6. apt-get安装软件" | tee -a "$LOG_FILE"
+apt-get update
+apt-get install -y resolvconf tree
+
+```
+
+#### Docker安装
+
+`docker-install.sh`
+
+```bash
+#!/bin/bash
+
+# vim docker-install.sh
+set -e
+
+# 颜色定义
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $*"
+}
+
+old_packages=("docker" "docker-engine" "docker.io" "docker-doc" "docker-compose" "docker-compose-v2" "podman-docker" "containerd" "runc" )
+# 检查是否有已安装的包
+installed=false
+for pkg in "${old_packages[@]}"; do
+    if dpkg -l "$pkg" &>/dev/null; then
+        installed=true
+        break
+    fi
+done
+
+if $installed; then
+    log_info "检测到旧版本 Docker，正在卸载..."
+    apt-get remove -y "${old_packages[@]}" 2>/dev/null || true
+    apt-get autoremove -y
+    log_info "旧版本卸载完成"
+else
+    log_info "未检测到旧版本 Docker"
+fi
+
+log_info "更新软件包索引..."
+apt-get update -y
+
+log_info "安装必要依赖..."
+apt-get install -y apt-transport-https ca-certificates curl gnupg gnupg2 lsb-release
+log_info "依赖包安装完成"
+
+log_info "添加 Docker GPG Key"
+log_info "使用阿里云镜像源..."
+
+# 添加阿里云 Docker GPG key
+curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+chmod a+r /etc/apt/keyrings/docker.gpg
+
+# 添加阿里云 Docker 仓库
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    
+# 更新软件包索引
+log_info "更新软件包索引..."
+apt-get update -qq
+
+# 查看可用版本
+log_info "可用的 Docker 版本:"
+apt-cache madison docker-ce | head -5
+
+# 安装 Docker
+DOCKER_VERSION=5:29.2.1-1~debian.13~trixie
+if [[ -n "$DOCKER_VERSION" ]]; then
+    log_info "安装指定版本: $DOCKER_VERSION"
+    apt-get install -y docker-ce="$DOCKER_VERSION" docker-ce-cli="$DOCKER_VERSION" containerd.io docker-buildx-plugin docker-compose-plugin
+else
+    log_info "安装最新版本..."
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+fi
+
+log_info "Docker 安装完成"
+
+log_info "配置 Docker"
+    
+# 创建配置目录
+mkdir -p /etc/docker
+
+cat > /etc/docker/daemon.json < EOF
+{
+    "registry-mirrors": ["https://docker.mirrors.ustc.edu.cn", "https://docker.m.daocloud.io", "https://docker.1panel.live", "https://hub.rat.dev" ],
+    "exec-opts": ["native.cgroupdriver=systemd"],
+    "log-driver": "json-file",
+    "log-opts": {"max-size": "100m","max-file": "3"},
+    "storage-driver": "overlay2"
+}
+EOF
+
+# 重载 systemd
+systemctl daemon-reload
+systemctl restart docker
+
+usermod -aG docker luck
+```
+
+#### nerdctl安装
+
+```bash
+
+```
+
