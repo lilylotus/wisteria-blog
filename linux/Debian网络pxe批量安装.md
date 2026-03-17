@@ -974,7 +974,7 @@ d-i preseed/late_command string \
     in-target usermod -aG sudo luck; \
     in-target systemctl enable ssh; \
     in-target mkdir -p /root/scripts; \
-    in-target curl -fsSL http://192.168.99.30:8080/preseed/optimize-server-pxe.sh -o /root/scripts/optimize-server-pxe.sh || echo "优化脚本下载失败，请手动执行"; \
+    in-target curl -fsSL http://192.168.99.30:8080/preseed/optimize-server-pxe.sh -o /root/scripts/optimize-server-pxe.sh ; \
     in-target chmod +x /root/scripts/optimize-server-pxe.sh; \
     in-target bash /root/scripts/optimize-server-pxe.sh;
     
@@ -1146,7 +1146,7 @@ log_info "配置 Docker"
 # 创建配置目录
 mkdir -p /etc/docker
 
-cat > /etc/docker/daemon.json < EOF
+cat > /etc/docker/daemon.json << EOF
 {
     "registry-mirrors": ["https://docker.mirrors.ustc.edu.cn", "https://docker.m.daocloud.io", "https://docker.1panel.live", "https://hub.rat.dev" ],
     "exec-opts": ["native.cgroupdriver=systemd"],
