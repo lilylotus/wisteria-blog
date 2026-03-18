@@ -1077,6 +1077,10 @@ apt-get install -y resolvconf tree
 # vim docker-install.sh
 set -e
 
+SCRIPT_DIR=$(cd $(dirname $0); pwd)
+echo "execution dir [${SCRIPT_DIR}}]"
+cd ${SCRIPT_DIR}
+
 # 颜色定义
 GREEN='\033[0;32m'
 NC='\033[0m'
@@ -1163,9 +1167,134 @@ systemctl restart docker
 usermod -aG docker luck
 ```
 
-#### nerdctl安装
+#### containerd安装
+
+[nerdctl 下载链接](https://github.com/containerd/nerdctl/releases) 、[buildkit 下载链接](https://github.com/moby/buildkit/releases)、[cni-plugins 下载链接](https://github.com/containernetworking/plugins/releases)、[cri-tools 下载链接](https://github.com/kubernetes-sigs/cri-tools/releases)
 
 ```bash
+wget -c https://github.com/containerd/nerdctl/releases/download/v2.2.1/nerdctl-2.2.1-linux-amd64.tar.gz
+wget -c https://github.com/moby/buildkit/releases/download/v0.28.0/buildkit-v0.28.0.linux-amd64.tar.gz
+wget -c https://github.com/containernetworking/plugins/releases/download/v1.9.1/cni-plugins-linux-amd64-v1.9.1.tgz
+wget -c https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.35.0/crictl-v1.35.0-linux-amd64.tar.gz
+wget -c https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.35.0/critest-v1.35.0-linux-amd64.tar.gz
+```
+
+```bash
+#!/bin/bash
+
+# containerd install
+apt-get update -y 
+apt-get install -y ca-certificates curl gnupg lsb-release
+
+#mkdir -p /etc/apt/keyrings
+#curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+#echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://mirrors.aliyun.com/docker-ce/linux/debian \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# apt-cache madison containerd
+apt-get update -y
+apt-get install -y containerd.io
+
+apt-get install -y ipset ipvsadm
+
+# containerd 配置
+mkdir -p /etc/containerd/
+containerd config default > /etc/containerd/config.toml
+sed -i "/config_path/s/      config_path = ''/      config_path = '\/etc\/containerd\/certs.d'/" /etc/containerd/config.toml
+sed -i '/SystemdCgroup/s/false/true/' /etc/containerd/config.toml
+mkdir -p /etc/containerd/certs.d/docker.io
+
+cat <<EOF > /etc/containerd/certs.d/docker.io/hosts.toml
+server = "https://docker.io"
+[host."https://docker.m.daocloud.io"]
+  capabilities = ["pull", "resolve"]
+[host."https://docker.mirrors.ustc.edu.cn"]
+  capabilities = ["pull", "resolve"]
+[host."https://docker.mirrors.sjtug.sjtu.edu.cn"]
+  capabilities = ["pull", "resolve"]
+EOF
+
+systemctl daemon-reload && systemctl restart containerd
+systemctl enable containerd
+
+DOWNLOAD_URL_PREFIX=http://192.168.99.30:8080/preseed
+wget -c ${DOWNLOAD_URL_PREFIX}/nerdctl-2.2.1-linux-amd64.tar.gz
+wget -c ${DOWNLOAD_URL_PREFIX}/buildkit-v0.28.0.linux-amd64.tar.gz
+wget -c ${DOWNLOAD_URL_PREFIX}/cni-plugins-linux-amd64-v1.9.1.tgz
+wget -c ${DOWNLOAD_URL_PREFIX}/crictl-v1.35.0-linux-amd64.tar.gz
+wget -c ${DOWNLOAD_URL_PREFIX}/critest-v1.35.0-linux-amd64.tar.gz
+
+# nerdctl
+mkdir nerdctl
+tar -zxf $(ls nerdctl*.tar.gz) -C nerdctl
+mv -f nerdctl/nerdctl /usr/local/bin/
+rm -rf nerdctl
+
+# cni
+mkdir -p /opt/cni/bin/
+tar -zxf $(ls cni-plugins-linux-*.tgz) -C /opt/cni/bin/
+
+# crictl
+tar -zxf $(ls crictl-*.tar.gz) -C /usr/local/bin/
+tar -zxf $(ls critest-*.tar.gz) -C /usr/local/bin/
+
+cat <<EOF > /etc/crictl.yaml
+runtime-endpoint: unix:///run/containerd/containerd.sock
+image-endpoint: unix:///run/containerd/containerd.sock
+timeout: 10
+pull-image-on-create: false
+EOF
+
+# buildkit
+mkdir buildkit
+tar -zxf $(ls buildkit-*.tar.gz) -C buildkit
+rm -f buildkit/bin/buildkit-qemu-*
+cp -np buildkit/bin/* /usr/local/bin/
+rm -rf buildkit
+
+cat <<EOF > /usr/lib/systemd/system/buildkitd.service
+[Unit]
+Description=BuildKit
+After=network.target local-fs.target
+Documentation=https://github.com/moby/buildkit
+
+[Service]
+#uncomment to enable the experimental sbservice (sandboxed) version of containerd/cri integration
+#Environment="ENABLE_CRI_SANDBOXES=sandboxed"
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=/usr/local/bin/buildkitd --oci-worker=false --containerd-worker=true
+
+Type=notify
+Delegate=yes
+KillMode=process
+Restart=always
+RestartSec=5
+# Having non-zero Limit*s causes performance problems due to accounting overhead
+# in the kernel. We recommend using cgroups to do container-local accounting.
+LimitNPROC=infinity
+LimitCORE=infinity
+LimitNOFILE=infinity
+# Comment TasksMax if your systemd version does not supports it.
+# Only systemd 226 and above support this version.
+TasksMax=infinity
+OOMScoreAdjust=-999
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+mkdir -p /etc/buildkit/
+cat <<EOF > /etc/buildkit/buildkitd.toml
+[registry."docker.io"]
+  mirrors = ["https://docker.mirrors.ustc.edu.cn", "https://docker.m.daocloud.io"]
+EOF
+
+systemctl daemon-reload && systemctl start buildkitd && systemctl enable buildkitd
 
 ```
 
