@@ -3,7 +3,7 @@ title: "Debian网络PXE批量安装"
 subtitle: "Debian PXE 批量安装"
 description: "Debian PXE 网络批量安装所需服务安装和配置"
 date: 2026-03-09T13:00:00+08:00
-lastmod: 2026-03-09T13:00:00+08:00
+lastmod: 2026-03-18T23:00:00+08:00
 draft: false
 
 authors: ["yzx"]
@@ -1172,6 +1172,12 @@ usermod -aG docker luck
 [nerdctl 下载链接](https://github.com/containerd/nerdctl/releases) 、[buildkit 下载链接](https://github.com/moby/buildkit/releases)、[cni-plugins 下载链接](https://github.com/containernetworking/plugins/releases)、[cri-tools 下载链接](https://github.com/kubernetes-sigs/cri-tools/releases)
 
 ```bash
+#!/bin/bash
+
+SCRIPT_DIR=$(cd $(dirname $0); pwd)
+echo "execution dir [${SCRIPT_DIR}}]"
+cd ${SCRIPT_DIR}
+
 wget -c https://github.com/containerd/nerdctl/releases/download/v2.2.1/nerdctl-2.2.1-linux-amd64.tar.gz
 wget -c https://github.com/moby/buildkit/releases/download/v0.28.0/buildkit-v0.28.0.linux-amd64.tar.gz
 wget -c https://github.com/containernetworking/plugins/releases/download/v1.9.1/cni-plugins-linux-amd64-v1.9.1.tgz
@@ -1181,6 +1187,12 @@ wget -c https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.35.0/c
 
 ```bash
 #!/bin/bash
+# containerd-install.sh
+SCRIPT_DIR=$(cd $(dirname $0); pwd)
+echo "execution dir [${SCRIPT_DIR}}]"
+cd ${SCRIPT_DIR}
+
+DOWNLOAD_URL_PREFIX=http://192.168.99.30:8080/preseed
 
 # containerd install
 apt-get update -y 
@@ -1222,7 +1234,6 @@ EOF
 systemctl daemon-reload && systemctl restart containerd
 systemctl enable containerd
 
-DOWNLOAD_URL_PREFIX=http://192.168.99.30:8080/preseed
 wget -c ${DOWNLOAD_URL_PREFIX}/nerdctl-2.2.1-linux-amd64.tar.gz
 wget -c ${DOWNLOAD_URL_PREFIX}/buildkit-v0.28.0.linux-amd64.tar.gz
 wget -c ${DOWNLOAD_URL_PREFIX}/cni-plugins-linux-amd64-v1.9.1.tgz
