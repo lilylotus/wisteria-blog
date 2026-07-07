@@ -3,7 +3,7 @@ title: "Debian网络PXE批量安装"
 subtitle: "Debian PXE 批量安装"
 description: "Debian PXE 网络批量安装所需服务安装和配置"
 date: 2026-03-09T13:00:00+08:00
-lastmod: 2026-03-18T23:00:00+08:00
+lastmod: 2026-06-09T20:00:00+08:00
 draft: false
 
 authors: ["yzx"]
@@ -901,7 +901,7 @@ d-i partman-auto/expert_recipe string \
             method{ efi } format{ } \
             mountpoint{ /boot/efi } label{ efi } \
         . \
-        512 512 512 ext4 \
+        512 512 512 xfs \
             $primary{ } \
             method{ format } format{ } \
             use_filesystem{ } filesystem{ ext4 } \
@@ -1108,6 +1108,8 @@ else
     log_info "未检测到旧版本 Docker"
 fi
 
+apt remove $(dpkg --get-selections docker.io docker-compose docker-doc podman-docker containerd runc | cut -f1)
+
 log_info "更新软件包索引..."
 apt-get update -y
 
@@ -1119,22 +1121,41 @@ log_info "添加 Docker GPG Key"
 log_info "使用阿里云镜像源..."
 
 # 添加阿里云 Docker GPG key
-curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
+#curl -fsSL https://mirrors.aliyun.com/docker-ce/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+#chmod a+r /etc/apt/keyrings/docker.gpg
 
 # 添加阿里云 Docker 仓库
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+#echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
     
 # 更新软件包索引
 log_info "更新软件包索引..."
-apt-get update -qq
+apt-get update -y
+
+# Add Docker's official GPG key:
+apt update -y 
+apt install -y ca-certificates curl
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+apt update -y
 
 # 查看可用版本
 log_info "可用的 Docker 版本:"
 apt-cache madison docker-ce | head -5
 
 # 安装 Docker
-DOCKER_VERSION=5:29.2.1-1~debian.13~trixie
+DOCKER_VERSION='5:29.4.2-2~debian.13~trixie'
 if [[ -n "$DOCKER_VERSION" ]]; then
     log_info "安装指定版本: $DOCKER_VERSION"
     apt-get install -y docker-ce="$DOCKER_VERSION" docker-ce-cli="$DOCKER_VERSION" containerd.io docker-buildx-plugin docker-compose-plugin
@@ -1192,7 +1213,7 @@ SCRIPT_DIR=$(cd $(dirname $0); pwd)
 echo "execution dir [${SCRIPT_DIR}}]"
 cd ${SCRIPT_DIR}
 
-DOWNLOAD_URL_PREFIX=http://192.168.99.30:8080/preseed
+DOWNLOAD_URL_PREFIX=http://192.168.99.10:8080/preseed
 
 # containerd install
 apt-get update -y 
@@ -1234,7 +1255,7 @@ EOF
 systemctl daemon-reload && systemctl restart containerd
 systemctl enable containerd
 
-wget -c ${DOWNLOAD_URL_PREFIX}/nerdctl-2.2.1-linux-amd64.tar.gz
+wget -c ${DOWNLOAD_URL_PREFIX}/nerdctl-2.2.2-linux-amd64.tar.gz
 wget -c ${DOWNLOAD_URL_PREFIX}/buildkit-v0.28.0.linux-amd64.tar.gz
 wget -c ${DOWNLOAD_URL_PREFIX}/cni-plugins-linux-amd64-v1.9.1.tgz
 wget -c ${DOWNLOAD_URL_PREFIX}/crictl-v1.35.0-linux-amd64.tar.gz
@@ -1312,6 +1333,10 @@ systemctl daemon-reload && systemctl start buildkitd && systemctl enable buildki
 #### kubectl安装
 
 ```bash
+#!/bin/bash
+
+KubeVersion=1.35.4-1.1
+
 apt-get install -y apt-transport-https ca-certificates curl gnupg
 
 curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.35/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
@@ -1320,7 +1345,10 @@ chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg # allow unprivileged APT 
 echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.35/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
 chmod 644 /etc/apt/sources.list.d/kubernetes.list
 
+# apt list --all-versions kubelet
+
 apt-get update
-apt-get install -y kubelet kubeadm kubectl
+apt install -y kubelet=${KubeVersion} kubeadm=${KubeVersion} kubectl=${KubeVersion}
+
 ```
 
