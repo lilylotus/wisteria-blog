@@ -3,7 +3,7 @@ title: "常用AI工具安装和配置"
 subtitle: "常用AI工具安装和配置|AI基础"
 description: "常用AI工具安装和配置"
 date: 2026-06-09T13:00:00+08:00
-lastmod: 2026-07-07T20:00:00+08:00
+lastmod: 2026-08-12T23:00:00+08:00
 draft: false
 
 authors: ["yzx"]
@@ -88,19 +88,25 @@ Claude Code 的定位：AI 软件工程师 + 命令行工具
 
 注意：中国区有地域限制，需要出国。
 
-Linux：
+#### 离线安装
+
+[Claude Code 安装包 github 链接](https://github.com/anthropics/claude-code/releases) 
+
+Windows 二进制 exe 文件下载后解压到 `C:\Users\Administrator\.local\bin` 目录。
+
+#### Linux
 
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
 ```
 
-Windows CMD：
+#### Windows CMD
 
 ```bash
 curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del install.cmd
 ```
 
-npm：
+#### npm
 
 ```bash
 npm install -g @anthropic-ai/claude-code
@@ -112,6 +118,50 @@ npm install -g @anthropic-ai/claude-code
 cd your-project
 claude
 ```
+
+### 禁用claude自动更新
+
+全局配置文件禁用更新
+
+Windows 路径，也就是 `C:\Users\你的用户名\.claude\settings.json` （没有就新建）
+
+```bash
+%USERPROFILE%\.claude\settings.json
+```
+
+写入禁用配置
+
+```json
+{
+  "env": {
+    "DISABLE_AUTOUPDATER": "1"
+  }
+}
+```
+
+注意：如果文件已经有其他配置内容，注意是在已有的 `env` 对象里追加这个键值，不要整个文件覆盖掉。
+
+配置说明：
+
+`DISABLE_AUTOUPDATER=1` 只会停止**后台自动检查更新**，`claude update` 和 `claude install` 这两个手动更新命令依然能正常用——这是官方推荐的默认做法，不完全锁死更新能力，只是不让它自己偷偷升级。
+
+若是想彻底连手动更新都禁用掉锁死
+
+```json
+{
+  "env": {
+    "DISABLE_UPDATES": "1"
+  }
+}
+```
+
+验证是否生效，可以先跑一下，记下当前版本号，过一段时间再跑一次同样命令，如果版本号没变化，说明自动更新确实被关掉了。
+
+```powershell
+claude --version
+```
+
+
 
 ### Claude HUD插件安装
 
@@ -346,3 +396,66 @@ Claude Code 配置文件（可以支持国内阿里百炼等AI语言模型接入
 - [Codex 桌面版下载链接](https://openai.com/zh-Hans-CN/codex/)
 
 **Codex** 是 OpenAI 推出的 AI Agent（智能代理）产品，最初是一个专门用于代码生成的模型，如今已经发展成能够执行实际工作的智能助手。它不仅能写代码，还能操作文件、运行工作流、生成文档、处理数据等任务。
+
+
+
+## 本地大模型安装
+
+### ollama
+
+[ollama 大模型部署工具官网](https://ollama.com/)， [ollama 下载链接](https://ollama.com/download)
+
+#### ollama安装
+
+ollama Windows 安装指定安装目录，在 ollama 下载好的安装软件 `OllamaSetup.exe` 目录执行下面命令。
+
+```cmd
+OllamaSetup.exe /DIR="D:\software\ollama"
+```
+
+[llm 开源大语言模型搜索链接](https://ollama.com/search)
+
+#### ollama模型管理
+
+下载指定版本模型
+
+```cmd
+# 只下载，不运行
+ollama pull qwen3.5:4b
+
+# 下载+直接运行(如果本地没有会自动先下载)
+ollama run qwen3.5:4b
+```
+
+指定版本/参数规模的写法，模型名格式是 `模型名:标签`，标签通常代表参数规模或量化精度：
+
+```bash
+# 千问 4B参数版本
+ollama pull qwen3.5:4b
+```
+
+查看本地已下载的模型
+
+```bash
+ollama list
+```
+
+删除不需要的模型(释放硬盘空间)
+
+```bash
+ollama rm qwen2.5:14b
+```
+
+ollama运行模型情况查询
+
+```powershell
+# 确认GPU能被正常识别
+nvidia-smi
+
+# 看当前ollama加载的模型运行在GPU还是CPU上
+ollama ps
+
+# NAME          ID              SIZE      PROCESSOR    CONTEXT    UNTIL
+# qwen3.5:4b    2a654d98e6fb    3.1 GB    100% GPU     4096       3 minutes from now
+```
+

@@ -324,63 +324,252 @@ server {
 }
 ```
 
-#### SSL 自签证书生成
+#### SSL 自签证书脚本
+
+自签生成服务端、客户端证书
 
 ```bash
 #!/bin/bash
+# ========================================
+# 自签HTTPS证书生成脚本 (服务端证书 + 客户端证书，支持mTLS双向认证)
+#
+# 原理: 自建一个本地CA，用这个CA分别签发:
+#   1. 服务端证书 -> 配置到Nginx/Web服务器，浏览器访问时验证服务端身份
+#   2. 客户端证书 -> 导入浏览器个人证书库，服务端验证客户端身份(双向认证)
+#   浏览器只需信任这一个CA根证书，之后CA签发的服务端证书就不会有警告；
+#   如果服务端开启了mTLS强制校验客户端证书，浏览器还需导入客户端证书
+#   才能正常访问(访问时浏览器会弹窗要求选择用哪个客户端证书)。
+#
+# 用法: ./make-cert.sh <域名或IP> [域名或IP2] ...
+# 示例: ./make-cert.sh example.local 10.4.100.123 127.0.0.1
+# ========================================
+set -e
 
-BASE_DIR=ssl
-SERVER_DOMAIN=*.labs.yzx
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+echo "Script directory: [$SCRIPT_DIR]"
+cd ${SCRIPT_DIR}
 
-rm -rf ${BASE_DIR} ; mkdir -p ${BASE_DIR} ; cd ${BASE_DIR}
+if [ $# -eq 0 ]; then
+    echo "用法: $0 <域名或IP> [域名或IP2] ..."
+    echo "示例: $0 example.local 10.4.100.123 127.0.0.1"
+    exit 1
+fi
 
-# create root CA
-openssl genrsa -out ca.key 4096
+WORK_DIR=./certs
 
-cat <<EOF > v3_ca
-[v3_ca]
-basicConstraints=CA:FALSE
-keyUsage=critical,keyCertSign,cRLSign
-EOF
+rm -rf ${WORK_DIR} ; mkdir -p ${WORK_DIR}/{ca,server,client}
 
+CA_KEY="$WORK_DIR/ca/ca.key"
+CA_CRT="$WORK_DIR/ca/ca.crt"
 # /C=US/ST=California/L=San Francisco/O=My Root CA/CN=My Root CA
 # C=国家/ST=地区或省份/L=地区局部名/O=机构名称/OU=组织单位名称/CN=网站域名/emailAddress=邮箱
-openssl req -x509 -new -nodes -sha512 -days 3650 \
- -subj "/C=CN/ST=Shanghai/L=Shanghai/O=Self/OU=Self/CN=Ssl Self Sign Root CA" \
- -extensions v3_ca \
- -key ca.key \
- -out ca.pem
+CA_SUBJECT="/C=CN/ST=Shanghai/L=Shanghai/O=Local Dev CA/OU=Sign/CN=Local Development Root CA"
 
-openssl x509 -outform der -in ca.pem -out ca.crt
+SERVER_KEY="$WORK_DIR/server/server.key"
+SERVER_CSR="$WORK_DIR/server/server.csr"
+SERVER_CRT="$WORK_DIR/server/server.crt"
+SERVER_EXT="$WORK_DIR/server/server.ext"
 
-# domain cert
-cat <<EOF > server_ext_file 
-authorityKeyIdentifier=keyid,issuer
-basicConstraints=CA:FALSE
-keyUsage=digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
-subjectAltName=@alt_names
+CLIENT_KEY="$WORK_DIR/client/client.key"
+CLIENT_CSR="$WORK_DIR/client/client.csr"
+CLIENT_CRT="$WORK_DIR/client/client.crt"
+CLIENT_EXT="$WORK_DIR/client/client.ext"
+CLIENT_P12="$WORK_DIR/client/client.p12"
+
+CLIENT_P12_PASSWORD="123456"   # 客户端p12证书导入密码，可自行修改
+
+DAYS_CA=3650      # CA证书有效期10年
+DAYS_SERVER=825   # 服务器证书有效期约2年(苹果/Chrome对自签证书有效期上限限制)
+DAYS_CLIENT=825   # 客户端证书有效期
+
+echo "========================================"
+echo "步骤1: 检查/生成本地根CA"
+echo "========================================"
+if [ -f "$CA_KEY" ] && [ -f "$CA_CRT" ]; then
+    echo "[提示] 检测到已有CA，复用现有CA(如需重新生成CA请先删除 $WORK_DIR 目录)"
+else
+    echo "生成CA私钥..."
+    openssl genrsa -out "$CA_KEY" 4096
+
+    echo "生成CA自签根证书..."
+    openssl req -x509 -new -nodes \
+        -key "$CA_KEY" \
+        -sha256 \
+        -days "$DAYS_CA" \
+        -subj "$CA_SUBJECT" \
+        -out "$CA_CRT"
+
+    echo "[OK] CA根证书生成完成: $CA_CRT"
+fi
+
+echo ""
+echo "========================================"
+echo "步骤2: 解析传入参数，区分域名和IP"
+echo "========================================"
+
+SAN_ENTRIES=""
+DNS_INDEX=1
+IP_INDEX=1
+FIRST_NAME="$1"   # 第一个参数作为证书CN和文件命名依据
+
+is_ip() {
+    local input="$1"
+    if [[ "$input" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        return 0
+    fi
+    if [[ "$input" =~ : ]]; then
+        return 0
+    fi
+    return 1
+}
+
+for ARG in "$@"; do
+    if is_ip "$ARG"; then
+        SAN_ENTRIES="${SAN_ENTRIES}IP.${IP_INDEX} = ${ARG}\n"
+        IP_INDEX=$((IP_INDEX + 1))
+        echo "  识别为IP:   $ARG"
+    else
+        SAN_ENTRIES="${SAN_ENTRIES}DNS.${DNS_INDEX} = ${ARG}\n"
+        DNS_INDEX=$((DNS_INDEX + 1))
+        echo "  识别为域名: $ARG"
+    fi
+done
+
+echo ""
+echo "========================================"
+echo "步骤3: 生成服务端私钥、CSR、证书"
+echo "========================================"
+
+openssl genrsa -out "$SERVER_KEY" 2048
+
+openssl req -new \
+    -key "$SERVER_KEY" \
+    -subj "/C=CN/ST=Shanghai/L=Shanghai/O=Local Dev/OU=Sign/CN=${FIRST_NAME}" \
+    -out "$SERVER_CSR"
+
+cat > "$SERVER_EXT" << EOF
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
 
 [alt_names]
-DNS.1=${SERVER_DOMAIN}
+$(echo -e "$SAN_ENTRIES")
 EOF
 
-openssl genrsa -out server.key 4096
+openssl x509 -req \
+    -in "$SERVER_CSR" \
+    -CA "$CA_CRT" \
+    -CAkey "$CA_KEY" \
+    -CAcreateserial \
+    -out "$SERVER_CRT" \
+    -days "$DAYS_SERVER" \
+    -sha256 \
+    -extfile "$SERVER_EXT"
 
-openssl req -sha512 -new -nodes \
-    -subj "/C=CN/ST=Shanghai/L=Shanghai/O=SelfServer/OU=SelfServer/CN=${SERVER_DOMAIN}" \
-    -key server.key \
-    -out server.csr
+echo "[OK] 服务端证书签发完成: $SERVER_CRT"
 
-openssl x509 -req -sha512 -days 3650 \
-    -extfile server_ext_file \
-    -CA ca.pem -CAkey ca.key -CAcreateserial \
-    -in server.csr \
-    -out server.crt
+echo ""
+echo "========================================"
+echo "步骤4: 生成客户端私钥、CSR、证书(用于mTLS双向认证)"
+echo "========================================"
 
-openssl pkcs12 -export -clcerts -out server.p12 -inkey server.key -in server.crt
+openssl genrsa -out "$CLIENT_KEY" 2048
 
-openssl x509 -inform PEM -in server.crt -out server.pem
+openssl req -new \
+    -key "$CLIENT_KEY" \
+    -subj "/C=CN/ST=Shanghai/L=Shanghai/O=Local Dev Client/OU=Sign/CN=${FIRST_NAME}-client" \
+    -out "$CLIENT_CSR"
 
-# 需要导入 ca.crt / server.crt 到 “受信任的根证书颁发机构”
+# 客户端证书的关键区别: extendedKeyUsage 是 clientAuth 而不是 serverAuth
+cat > "$CLIENT_EXT" << EOF
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = clientAuth
+EOF
+
+openssl x509 -req \
+    -in "$CLIENT_CSR" \
+    -CA "$CA_CRT" \
+    -CAkey "$CA_KEY" \
+    -CAcreateserial \
+    -out "$CLIENT_CRT" \
+    -days "$DAYS_CLIENT" \
+    -sha256 \
+    -extfile "$CLIENT_EXT"
+
+echo "[OK] 客户端证书签发完成: $CLIENT_CRT"
+
+echo ""
+echo "========================================"
+echo "步骤5: 把客户端证书打包成 .p12 (浏览器只能导入p12/pfx格式的客户端证书)"
+echo "========================================"
+
+openssl pkcs12 -export \
+    -inkey "$CLIENT_KEY" \
+    -in "$CLIENT_CRT" \
+    -certfile "$CA_CRT" \
+    -out "$CLIENT_P12" \
+    -passout "pass:${CLIENT_P12_PASSWORD}"
+
+echo "[OK] 客户端p12证书生成完成: $CLIENT_P12 (导入密码: ${CLIENT_P12_PASSWORD})"
+
+echo ""
+echo "========================================"
+echo "生成完成，文件清单"
+echo "========================================"
+echo "CA根证书(需要导入到浏览器/系统信任列表，用于信任服务端证书):"
+echo "  $CA_CRT"
+echo ""
+echo "服务端证书和私钥(配置到Nginx/Web服务器):"
+echo "  证书: $SERVER_CRT"
+echo "  私钥: $SERVER_KEY"
+echo ""
+echo "客户端证书(仅当服务端开启mTLS强制双向认证时才需要):"
+echo "  p12证书(导入浏览器用): $CLIENT_P12  (密码: ${CLIENT_P12_PASSWORD})"
+echo "  原始证书: $CLIENT_CRT"
+echo "  原始私钥: $CLIENT_KEY"
+
+echo ""
+echo "========================================"
+echo "下一步1: 让浏览器信任CA(这一步必做，否则服务端证书依然会有警告)"
+echo "========================================"
+echo ""
+echo "【macOS】"
+echo "  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $CA_CRT"
+echo ""
+echo "【Windows(用管理员PowerShell)】"
+echo "  Import-Certificate -FilePath \"$CA_CRT\" -CertStoreLocation Cert:\\LocalMachine\\Root"
+echo ""
+echo "【Linux (Ubuntu/Debian)】"
+echo "  sudo cp $CA_CRT /usr/local/share/ca-certificates/local-dev-ca.crt"
+echo "  sudo update-ca-certificates"
+echo ""
+echo "【Linux (CentOS/RHEL)】"
+echo "  sudo cp $CA_CRT /etc/pki/ca-trust/source/anchors/local-dev-ca.crt"
+echo "  sudo update-ca-trust"
+echo ""
+echo "【Firefox(独立证书库，需单独导入)】"
+echo "  设置 → 隐私与安全 → 证书 → 查看证书 → 颁发机构 → 导入 → 选择 $CA_CRT → 勾选信任用于识别网站"
+echo ""
+echo "========================================"
+echo "下一步2(可选，仅mTLS场景需要): 把客户端证书导入浏览器个人证书库"
+echo "========================================"
+echo ""
+echo "【macOS】双击 $CLIENT_P12，用钥匙串访问App导入，输入密码: ${CLIENT_P12_PASSWORD}"
+echo ""
+echo "【Windows】双击 $CLIENT_P12，走证书导入向导，输入密码: ${CLIENT_P12_PASSWORD}"
+echo "          存储位置选择\"个人\"证书存储"
+echo ""
+echo "【Chrome/Edge(Windows/Linux)】"
+echo "  设置 → 隐私设置和安全性 → 安全 → 管理证书 → 您的证书 → 导入 → 选择 $CLIENT_P12"
+echo ""
+echo "【Firefox】"
+echo "  设置 → 隐私与安全 → 证书 → 查看证书 → 您的证书 → 导入 → 选择 $CLIENT_P12"
+echo ""
+echo "导入完成后重启浏览器。如果服务端开启了mTLS强制校验，访问时浏览器会"
+echo "弹窗要求选择使用哪个客户端证书，选择刚导入的这个即可。"
+echo "========================================"
+
 ```
 

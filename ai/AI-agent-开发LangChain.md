@@ -11,7 +11,7 @@ tags: ["AI", "LangChain"]
 categories: ["AI"]
 series: []
 
-featuredImage: "https://www.nihility.cn/files/images/IMG_2681.JPG"
+featuredImage: "https://www.nihility.cn/files/images/IMG_2675.JPG"
 featuredImagePreview: ""
 
 lightgallery: true
