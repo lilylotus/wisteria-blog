@@ -109,6 +109,40 @@ uv use 3.13.4
 
 [LangChain 官方链接](https://www.langchain.com/) 、[LangChain 构建概览文档链接](https://docs.langchain.com/build-overview/) 、[LangChain Python 使用文档链接](https://docs.langchain.com/oss/python/langchain/overview)
 
+[LangChain](https://docs.langchain.com/oss/python/langchain/overview) 使用流程：
+
+1. LangChain安装
+   - `uv add langchain`
+2. 初始化大语言模型（如：gpt、阿里百炼、DeepSeek）【简单对话模型也可以直接调用，复杂业务还是常使用 Agent 调用】
+   - `uv add langchain-openai`
+   - `init_chat_model`（通用其它模型推荐）/ `ChatAnthropic/ChatOpenAI` （厂商直接初始化）
+3. 创建 [LangChain Agent](https://docs.langchain.com/oss/python/langchain/agents) 预置 Agent，绑定自定义工具
+   - `create_agent`
+4. agent 调用模型对话
+   - `invoke` （阻塞）/ `stream` （流式）
+
+简单开始：
+
+```python
+# pip install -qU langchain "langchain[openai]"
+from langchain.agents import create_agent
+
+def get_weather(city: str) -> str:
+    """Get weather for a given city."""
+    return f"It's always sunny in {city}!"
+
+agent = create_agent(
+    model="openai:gpt-5.5",
+    tools=[get_weather],
+    system_prompt="You are a helpful assistant",
+)
+
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "What's the weather in San Francisco?"}]}
+)
+print(result["messages"][-1].content_blocks)
+```
+
 ### LangChain 安装
 
 常用插件安装
@@ -256,7 +290,7 @@ print(response.model_dump_json(indent = 2))
 
 
 
-### 使用自定义tools
+### 创建agent/使用自定义tools
 
 LangChain 的工具调用是**框架统一封装的能力**，跟你用哪个厂商的模型无关——只要模型本身支持function calling（阿里百炼的 `qwen-plus`/`qwen-max` 都支持），绑定tools的写法和调用 OpenAI/Claude 完全一样。给你完整示例。
 
@@ -458,25 +492,124 @@ def query_server_metric(server_ip: str, metric: str) -> str:
     return f"{server_ip} 的 {metric} 使用率: 45%"
 ```
 
+### LangChain消息
 
+在 LangChain 中 `Message` （[消息](https://docs.langchain.com/oss/python/langchain/messages)）是模型上下文的基本单元。它们代表模型的输入和输出，承载着与 LLM 交互时表示对话状态所需的内容和元数据。
+
+#### 基本用法
 
 ```python
-# pip install -qU langchain "langchain[openai]"
+from langchain.chat_models import init_chat_model
+from langchain.messages import HumanMessage, AIMessage, SystemMessage
+
+model = init_chat_model("gpt-5-nano")
+
+system_msg = SystemMessage("You are a helpful assistant.")
+human_msg = HumanMessage("Hello, how are you?")
+
+# Use with chat models
+messages = [system_msg, human_msg]
+response = model.invoke(messages)  # Returns AIMessage
+```
+
+#### 简单消息
+
+模型调用消息默认是用户（`user`）类型
+
+```python
+response = llm.invoke("你是谁？")
+print(response.model_dump_json(indent = 2))
+```
+
+#### 字典格式
+
+```bash
+messages = [
+    {"role": "system", "content": "You are a poetry expert"},
+    {"role": "user", "content": "Write a haiku about spring"},
+    {"role": "assistant", "content": "Cherry blossoms bloom..."}
+]
+response = model.invoke(messages)
+```
+
+#### LangChain消息类型
+
+- 系统消息（System message）：告诉模型如何运行，并为交互提供上下文
+- 人类消息（Human message）：用户的输入和与模型的交互消息
+- AI消息（AI message）：模型生成的响应，包括文本内容、工具调用和元数据
+- 工具消息（Tool message）：表示工具调用的输出
+
+```python
+from langchain.messages import SystemMessage, HumanMessage, AIMessage
+
+messages = [
+    SystemMessage("You are a poetry expert"),
+    HumanMessage("Write a haiku about spring"),
+    AIMessage("Cherry blossoms bloom...")
+]
+
+response = model.invoke(messages)
+```
+
+### 短期记忆
+
+对话历史是短期记忆（[short-term memory](https://docs.langchain.com/oss/python/langchain/short-term-memory)）最常见的形式。
+
+#### 手动记录对话上下文
+
+```python
+from langchain.messages import SystemMessage, HumanMessage, AIMessage
+
+messages = [
+    HumanMessage('我是奥特之父')
+]
+
+response = llm.invoke(messages)
+print(response.model_dump_json(indent = 2))
+
+# 手动在消息队列中记录 AI 交互响应的消息内容
+messages.append(AIMessage(response.content))
+# 基于对话上下文提问，这样 AI 模型就会基于前面对话回答和上下文有关的问题
+messages.append(HumanMessage("我是谁？"))
+
+response = llm.invoke(messages)
+print(response.model_dump_json(indent = 2))
+```
+
+#### 基于langgraph checkpoint的短期记忆
+
+```python
 from langchain.agents import create_agent
+from langgraph.checkpoint.memory import InMemorySaver
+from langchain.messages import SystemMessage, HumanMessage, AIMessage
 
-def get_weather(city: str) -> str:
-    """Get weather for a given city."""
-    return f"It's always sunny in {city}!"
+llm = init_chat_model(
+    model="qwen3.8-max",
+    model_provider='openai',
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_BASE_URL"),
+    temperature=0
+)
 
+# 1. 添加 checkpointer
 agent = create_agent(
-    model="openai:gpt-5.5",
-    tools=[get_weather],
-    system_prompt="You are a helpful assistant",
+    model=llm,
+    checkpointer=InMemorySaver()
 )
 
-result = agent.invoke(
-    {"messages": [{"role": "user", "content": "What's the weather in San Francisco?"}]}
+# 2. 每次对话传统唯一相同的线程id
+thread_config = {"configurable": {"thread_id": "1"}}
+
+response = agent.invoke(
+    {"messages": [HumanMessage('我是奥特之父')]},
+    thread_config
 )
-print(result["messages"][-1].content_blocks)
+print(response["messages"][-1].content)
+
+response = agent.invoke(
+    {"messages": [HumanMessage('我是谁呢？')]},
+    thread_config
+)
+print(response["messages"][-1].content)
 ```
 
