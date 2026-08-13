@@ -578,6 +578,16 @@ print(response.model_dump_json(indent = 2))
 
 #### 基于langgraph checkpoint的短期记忆
 
+属于 **LangGraph** 的功能，`checkpointer` 是给你之前的 Agent 加"记忆/状态持久化"能力的组件。
+
+[Checkpointer](https://docs.langchain.com/oss/python/integrations/checkpointers/index) 的作用是把 LangGraph 的执行状态存下来，SQLite实现适合本地开发、测试、或轻量级部署场景。没有 checkpointer 的话，之前的 `create_agent` 每次调用 `.invoke()` 都是**无状态**的，对话结束状态就丢了；加上 checkpointer 后，能做到：
+
+- **多轮对话记忆**：同一个 `thread_id` 下的历史消息自动持久化，下次调用能接着上次的上下文继续
+- **中断恢复**：Agent执行到一半（比如等人工审批）可以暂停，之后从断点继续
+- **时间旅行调试**：能查看/回退到执行过程中任意一个历史checkpoint状态
+
+##### 基于内存
+
 ```python
 from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
@@ -613,3 +623,235 @@ response = agent.invoke(
 print(response["messages"][-1].content)
 ```
 
+##### Sqllite3
+
+安装
+
+```bash
+uv add langgraph-checkpoint-sqlite
+```
+
+基础用法
+
+```python
+from langgraph.checkpoint.sqlite import SqliteSaver
+import sqlite3
+
+conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
+checkpointer = SqliteSaver(conn)
+```
+
+结合 Agent 使用
+
+```python
+from langchain.agents import create_agent
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langchain.chat_models import init_chat_model
+import os
+
+model = init_chat_model(
+    model = "qwen3.8-max",
+    model_provider = 'openai',
+    api_key = os.getenv("OPENAI_API_KEY"),
+    base_url = os.getenv("OPENAI_BASE_URL"),
+    temperature = 0
+)
+
+with SqliteSaver.from_conn_string("agent_memory.db") as checkpointer:
+    agent = create_agent(model, tools=[], checkpointer=checkpointer)
+
+    # thread_id相当于"会话ID"，同一个thread_id的对话历史会被自动记住
+    config = {"configurable": {"thread_id": "user-123"}}
+
+    response1 = agent.invoke(
+        {"messages": [("user", "我叫张三")]},
+        config=config
+    )
+
+    # 第二次调用，用同一个thread_id，Agent能记得"我叫张三"
+    response2 = agent.invoke(
+        {"messages": [("user", "我叫什么名字?")]},
+        config=config
+    )
+    print(response2["messages"][-1].content)   # 应该能正确回答"张三"
+```
+
+### Agent对话方式
+
+基础：`stream()` vs `invoke()`
+
+```python
+from langchain.agents import create_agent
+from langchain.chat_models import init_chat_model
+import os
+
+model = init_chat_model(
+    model="qwen-plus",
+    model_provider="openai",
+    api_key=os.getenv("DASHSCOPE_API_KEY"),
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+)
+
+agent = create_agent(model, tools=[get_weather])
+
+# invoke: 等全部执行完才返回(之前一直用的方式)
+result = agent.invoke({"messages": [("user", "北京天气怎么样")]})
+
+# stream: 边执行边返回，能实时看到中间过程
+for chunk in agent.stream({"messages": [("user", "北京天气怎么样")]}):
+    print(chunk)
+```
+
+注意：
+
+```bash
+# 如果长这样，就不需要传thread_id
+agent = create_agent(model, tools=[get_weather])
+
+# 如果长这样(带了checkpointer)，就必须每次传thread_id
+agent = create_agent(model, tools=[get_weather], checkpointer=checkpointer)
+```
+
+#### stream
+
+`stream_mode` 参数，控制流式输出的粒度，这是最关键的参数，决定你想看到什么级别的实时信息：
+
+```python
+# 模式1: "values" —— 每一步结束后，返回完整的当前状态(所有累积的消息)
+for chunk in agent.stream(
+    {"messages": [("user", "北京天气怎么样")]},
+    stream_mode="values"
+):
+    print(chunk["messages"][-1])
+
+# 模式2: "updates" —— 只返回每一步的增量更新(哪个节点产生了什么变化)，更省流量
+for chunk in agent.stream(
+    {"messages": [("user", "北京天气怎么样")]},
+    stream_mode="updates"
+):
+    print(chunk)
+
+# 模式3: "messages" —— 逐token流式输出，类似ChatGPT打字机效果
+for token, metadata in agent.stream(
+    {"messages": [("user", "北京天气怎么样")]},
+    stream_mode="messages"
+):
+    print(token.content, end="", flush=True)
+```
+
+实际最常用的场景：`stream_mode="messages"` 做打字机效果
+
+```python
+# thread_id相当于"会话ID"，同一个thread_id的对话历史会被自动记住
+config = {"configurable": {"thread_id": "async1"}}
+
+stream = agent.stream(
+    {"messages": [("user", "你是谁？")]},
+    config=config,
+    stream_mode="messages"
+)
+
+for token, metadata in stream:
+    print(token.content, end="", flush=True)
+```
+
+`metadata` 里能拿到额外信息，比如这个token是来自哪个节点/哪次模型调用：
+
+```python
+print(metadata.get("langgraph_node"))   # 比如 "agent" 或 "tools"
+```
+
+处理工具调用过程中的流式输出（区分"模型在说话"还是"在调用工具"）
+
+```python
+for chunk in agent.stream(
+    {"messages": [("user", "查一下北京天气，再算一下15*8")]},
+    stream_mode="updates"
+):
+    for node_name, node_output in chunk.items():
+        if node_name == "agent":
+            # 模型自己的输出/决策
+            last_msg = node_output["messages"][-1]
+            if last_msg.tool_calls:
+                print(f"[决定调用工具]: {[tc['name'] for tc in last_msg.tool_calls]}")
+            else:
+                print(f"[模型回复]: {last_msg.content}")
+        elif node_name == "tools":
+            # 工具执行结果
+            for msg in node_output["messages"]:
+                print(f"[工具返回]: {msg.content}")
+```
+
+多种 stream_mode 同时用（组合模式）
+
+```python
+for stream_mode, chunk in agent.stream(
+    {"messages": [("user", "北京天气怎么样")]},
+    stream_mode=["updates", "messages"]
+):
+    if stream_mode == "messages":
+        token, metadata = chunk
+        print(token.content, end="", flush=True)
+    elif stream_mode == "updates":
+        print(f"\n[节点更新]: {chunk}")
+```
+
+异步流式（生产环境Web服务更常用，比如配合FastAPI做SSE推送）
+
+```python
+async def stream_response(question: str):
+    async for token, metadata in agent.astream(
+        {"messages": [("user", question)]},
+        stream_mode="messages"
+    ):
+        if token.content:
+            yield token.content
+```
+
+结合 FastAPI 做成流式接口：
+
+```python
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+
+app = FastAPI()
+
+@app.post("/chat/stream")
+async def chat_stream(question: str):
+    async def generate():
+        async for token, metadata in agent.astream(
+            {"messages": [("user", question)]},
+            stream_mode="messages"
+        ):
+            if token.content:
+                yield token.content
+    return StreamingResponse(generate(), media_type="text/plain")
+```
+
+结合你之前问的 checkpointer，做带记忆的流式对话
+
+```python
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+with SqliteSaver.from_conn_string("chat.db") as checkpointer:
+    agent = create_agent(model, tools=[get_weather], checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": "user-123"}}
+
+    for token, metadata in agent.stream(
+        {"messages": [("user", "我叫张三，帮我查下北京天气")]},
+        config=config,
+        stream_mode="messages"
+    ):
+        if token.content:
+            print(token.content, end="", flush=True)
+```
+
+`stream_mode` 完整选项对照表
+
+| 模式       | 返回内容                             | 适用场景                                          |
+| ---------- | ------------------------------------ | ------------------------------------------------- |
+| `values`   | 每步之后的完整累积状态               | 需要看到全量messages历史                          |
+| `updates`  | 每步的增量变化(按节点名分组)         | 想清楚知道"哪个节点做了什么"，调试/展示中间过程用 |
+| `messages` | 逐token流式输出+元数据               | 打字机效果，用户体验最像ChatGPT                   |
+| `debug`    | 最详细的调试信息                     | 排查Agent内部执行逻辑问题                         |
+| `custom`   | 自定义流式数据(需要在工具内主动写入) | 工具内部想主动推送进度信息                        |
