@@ -746,13 +746,14 @@ for token, metadata in agent.stream(
 config = {"configurable": {"thread_id": "async1"}}
 
 stream = agent.stream(
-    {"messages": [("user", "你是谁？")]},
+    {"messages": [("user", "我是东山呀！")]},
     config=config,
     stream_mode="messages"
 )
 
 for token, metadata in stream:
-    print(token.content, end="", flush=True)
+    if token.content:
+        print(token.content, end="", flush=True)
 ```
 
 `metadata` 里能拿到额外信息，比如这个token是来自哪个节点/哪次模型调用：
