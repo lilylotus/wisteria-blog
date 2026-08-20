@@ -424,7 +424,7 @@ OllamaSetup.exe /DIR="D:\software\ollama"
 ollama pull qwen3.5:4b
 
 # 下载+直接运行(如果本地没有会自动先下载)
-ollama run qwen3.5:4b
+ollama run qwen3.5:9b
 ```
 
 指定版本/参数规模的写法，模型名格式是 `模型名:标签`，标签通常代表参数规模或量化精度：
