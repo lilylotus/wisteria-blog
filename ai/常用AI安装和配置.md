@@ -161,7 +161,62 @@ Windows 路径，也就是 `C:\Users\你的用户名\.claude\settings.json` （�
 claude --version
 ```
 
+### Claude Code跳过确认
 
+Claude Code 提供几种不同强度的方式来跳过确认，按推荐程度排列：
+
+#### 方式一：settings.json 全局允许 Bash（推荐，相对安全）
+
+在 `~/.claude/settings.json`（全局生效）或项目内 `.claude/settings.json`：
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash"
+    ]
+  }
+}
+```
+
+所有 Bash 命令都不再询问，但 Edit、Write 等其它工具仍会走正常权限流程。如果想连文件编辑也一起放开：
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Edit",
+      "Write"
+    ]
+  }
+}
+```
+
+#### 方式二：设置 `defaultMode` 为 `acceptEdits`
+
+```json
+{
+  "permissions": {
+    "defaultMode": "acceptEdits"
+  }
+}
+```
+
+自动接受文件编辑操作，但 Bash 命令仍需确认（相对温和的自动化）。
+
+#### 最后推荐
+
+```json
+{
+  "permissions": {
+    "allow": ["Bash"],
+    "defaultMode": "acceptEdits"
+  }
+}
+```
+
+这样常用命令和文件编辑都不打断，真正危险的操作（比如 `git push --force`）可以额外加进 `ask` 或 `deny` 列表兜底。
 
 ### Claude HUD插件安装
 

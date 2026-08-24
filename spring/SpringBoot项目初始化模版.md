@@ -989,6 +989,7 @@ logging:
     /* Feign底层用OkHttp替代默认的HttpURLConnection，支持连接池，性能更好 */
     implementation 'io.github.openfeign:feign-hc5:13.9.2'
     implementation 'org.springframework.cloud:spring-cloud-starter-openfeign'
+    implementation 'org.springframework.cloud:spring-cloud-starter-loadbalancer'
 ```
 
 ##### application.yml配置
