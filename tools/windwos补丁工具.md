@@ -7,7 +7,7 @@ lastmod: 2025-01-15T00:36:09+08:00
 draft: false
 
 authors: ["yzx"]
-tags: ["工具"]
+tags: ["Tools"]
 categories: []
 series: []
 

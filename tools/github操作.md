@@ -1,4 +1,25 @@
-# git常用操作
+---
+title: "git常用命令"
+subtitle: "git常用命令使用"
+description: "git常用命令使用"
+date: 2026-08-26T22:00:00+08:00
+lastmod: 2026-08-26T22:00:00+08:00
+draft: false
+
+authors: ["yzx"]
+tags: ["Git"]
+categories: ["Tools"]
+series: []
+
+featuredImage: "https://www.nihility.cn/files/images/IMG_2485.JPG"
+featuredImagePreview: ""
+
+lightgallery: true
+math:
+  enable: true
+---
+
+# git常用命令
 
 ## git提交本地代码到远程
 
@@ -68,6 +89,8 @@ git commit -m "your commit message"
 git push origin 3.5.x
 ```
 
+------
+
 ### 补充：查看当前状态确认操作正确
 
 ```bash
@@ -80,6 +103,7 @@ git remote -v
 # 查看推送前的改动状态
 git status
 ```
+------
 
 ### 本地仓库推送到GitHub网页初始化
 

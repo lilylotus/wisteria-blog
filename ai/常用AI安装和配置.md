@@ -3,7 +3,7 @@ title: "常用AI工具安装和配置"
 subtitle: "常用AI工具安装和配置|AI基础"
 description: "常用AI工具安装和配置"
 date: 2026-06-09T13:00:00+08:00
-lastmod: 2026-08-12T23:00:00+08:00
+lastmod: 2026-08-126T22:00:00+08:00
 draft: false
 
 authors: ["yzx"]
