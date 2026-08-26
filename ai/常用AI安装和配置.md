@@ -218,6 +218,455 @@ Claude Code 提供几种不同强度的方式来跳过确认，按推荐程度�
 
 这样常用命令和文件编辑都不打断，真正危险的操作（比如 `git push --force`）可以额外加进 `ask` 或 `deny` 列表兜底。
 
+### Claude Code约束规范CLAUDE.md
+
+规范类约束（不是权限、也不是流程节点），应该和 OpenSpec 约束一样，写入 **`CLAUDE.md`**，但建议单独归类，不要和流程类约束混在一起，便于后续维护。
+
+用户级 `~/.claude/CLAUDE.md` 与项目级 `CLAUDE.md` 的核心关系：**叠加合并，不是互斥覆盖**
+
+两者不是"谁覆盖谁"的替代关系，而是**全部加载、内容拼接叠加**进上下文，同时生效。所有层级都会累加贡献内容，更具体的指令优先，项目级覆盖用户级（这里"覆盖"指的是**规则冲突时**项目级说了算，而不是项目级存在时用户级就不加载）。
+
+完整层级结构（从全局到局部）
+
+```
+1. 企业托管策略（Managed Policy）  ← 最高优先级，个人无法覆盖
+   /Library/Application Support/ClaudeCode/managed-settings.json (macOS)
+   /etc/claude-code/managed-settings.json (Linux)
+
+2. 用户级 CLAUDE.md
+   ~/.claude/CLAUDE.md              ← 你个人所有项目通用的偏好
+
+3. 项目级 CLAUDE.md
+   <项目根目录>/CLAUDE.md            ← 团队共享，建议提交 git
+
+4. 项目本地 CLAUDE.md
+   <项目根目录>/CLAUDE.local.md     ← 个人在这个项目里的偏好，不提交
+
+5. 子目录 CLAUDE.md
+   <项目>/backend/CLAUDE.md         ← 按需加载，只在访问该目录文件时生效
+```
+
+| 规则                 | 说明                                                         |
+| -------------------- | ------------------------------------------------------------ |
+| **全部加载**         | 不管有几层，Claude Code 启动时会把能找到的 CLAUDE.md 全部读入并拼接 |
+| **冲突时项目级优先** | < cite index="41-1">当用户级说用 4 空格缩进、项目级说用 2 空格缩进时，最终生效的是项目级的 2 空格。越贴近当前项目的规矩，越应该压过笼统的全局偏好 |
+| **不冲突则都生效**   | 用户级说"用中文回复"，项目级没提这个 → 中文回复依然生效，两者是互补关系，不是二选一 |
+
+#### 推荐结构
+
+```
+项目根目录/
+├── CLAUDE.md                    # 主文件，引用其他规范文件
+├── .claude/
+│   └── rules/
+│       ├── openspec-workflow.md # 之前的 OpenSpec 流程约束
+│       └── spring-conventions.md # 本次的 SpringBoot 代码规范
+```
+
+#### 方式一：直接写入 `CLAUDE.md`（简单场景推荐）
+
+```markdown
+# 项目编码规范
+
+## SpringBoot 接口约束
+
+- **Controller** 保持薄：只做接口定义、`@Valid` 校验触发、调用 service，不写业务逻辑
+- 接口 URL 使用**全路径**（如 `/api/v1/users`），不要用类级别 `@RequestMapping` 再拼方法级别路径
+- Service 层负责业务逻辑，Controller 不直接操作 Repository/Mapper
+- 统一使用 `ResponseEntity<R<T>>` 或项目统一的响应包装类返回结果
+- 参数校验统一使用 `@Valid` + Bean Validation 注解，不在方法体内手写 if 校验
+
+（继续补充团队约定的其他规范...）
+```
+
+#### 方式二：拆分为独立规范文件 + 引用（团队协作、规范较多时推荐）
+
+`CLAUDE.md` 主文件里引用：
+
+```markdown
+# 项目说明
+
+## 最高优先级工作流约束
+
+任何编码规范都不能绕过 OpenSpec 人工确认流程。
+
+即使用户要求直接修改代码，只要当前变更属于 OpenSpec 管理范围，也必须先检查 `proposal.md`、`design.md`、`tasks.md`。如果这些文档需要新增或修改，完成文档后必须停止，等待用户明确确认，禁止自动继续编码。
+
+## SpringBoot编码规范
+@.claude/rules/springboot-conventions.md
+
+## OpenSpec 工作流
+@.claude/rules/openspec-workflow.md
+```
+
+`@path/to/file.md`，支持相对路径和绝对路径，相对路径解析是相对于**当前 CLAUDE.md 所在目录**解析。
+
+重要坑点：`@import` 语法支持 `~/` 路径，比如 `@~/.claude/team-preferences.md` 会解析到每个开发者自己的家目录，这会造成和用户级 `CLAUDE.md` 一样的"在我机器上能跑"的陷阱——已经创建过这个文件的老成员能正常工作，但从没创建过这个文件的新人，这个导入会静默解析为空。**所以团队共享的规范文件必须放在项目仓库内**（如 `.claude/rules/spring-conventions.md`），不要用 `~/` 家目录路径，否则新同事拉下代码后规范文件是空的还不会报错。
+
+##### `.claude/rules/springboot-conventions.md`
+
+~~~markdown
+# SpringBoot 项目编码规范
+
+## Controller 层规范
+
+### 基本原则
+
+- Controller 必须保持轻量、简洁。
+- Controller 只负责：
+  - 定义 HTTP 接口。
+  - 接收和绑定请求参数。
+  - 使用 `@Valid` 或 `@Validated` 触发参数校验。
+  - 调用 Service / Application 层。
+  - 返回接口响应结果。
+
+- 禁止在 Controller 中编写业务逻辑。
+- 禁止在 Controller 中直接访问数据库。
+- 禁止 Controller 直接调用 Mapper、Repository、DAO。
+- 禁止 Controller 直接操作 Redis、MQ、ES 等基础设施组件。
+- 禁止在 Controller 中编写事务逻辑。
+- 禁止在 Controller 中进行复杂的数据转换、状态流转、权限判断等业务处理。
+- 所有业务逻辑必须放在 Service / Application 层。
+
+### URL 路径
+- 使用全路径注解（如 `@GetMapping("/api/v1/users/{id}")`）。
+- 每个接口必须在方法级注解中直接声明完整 URL。
+- 禁止使用类级别的 `@RequestMapping` 定义公共路径前缀。
+- `@GetMapping`、`@PostMapping`、`@PutMapping`、`@PatchMapping`、`@DeleteMapping` 必须直接写完整接口路径。
+
+### 职责边界
+- 只做：接口定义、参数接收、`@Valid` 触发校验、调用 Service、返回结果
+- 不做：业务逻辑判断、直接操作数据库、复杂数据转换（应在 Service 或 Converter 完成）
+
+### 参数校验规范
+- 统一用 `@Valid` + Bean Validation 注解，不手写 if 校验
+- 校验失败统一由全局异常处理器（`@ControllerAdvice`）捕获处理，Controller 不写 try-catch
+- 请求 DTO 优先使用 Jakarta Bean Validation。
+- Spring Boot 3.x 使用 jakarta.validation.。
+- @RequestBody DTO 默认使用 @Valid 触发校验。
+- 需要分组校验或方法参数校验时使用 @Validated。
+- 格式、长度、非空、范围等基础校验放在 DTO 中。
+- 涉及数据库状态、业务规则、权限、唯一性等业务校验必须放在 Service 层。
+
+### 返回值
+- 统一使用项目响应包装类（如 `Result<T>` / `ApiResponse<T>`），不允许直接返回裸对象或 `ResponseEntity` 混用
+
+### 依赖注入
+- Controller 只允许注入 Service 层接口，禁止注入 Mapper/Repository
+
+### 修改代码时的约束
+
+当生成、修改或重构 Spring Boot Controller 时，必须遵守以下规则：
+- 新增接口时，必须直接在方法级 Mapping 注解中写完整 URL。
+- 不允许新增类级别 @RequestMapping。
+- 如果 Controller 中存在业务逻辑，优先将其迁移到 Service / Application 层。
+- 如果 Controller 直接调用 Mapper、Repository、DAO，应改为调用 Service。
+- Controller 不负责事务控制。
+- Controller 不负责业务状态判断。
+- Controller 不负责复杂对象转换；复杂转换应放在合适的转换层、Assembler、Converter 或 Service 中。
+- 修改已有代码时，应尽量遵循现有项目结构，但现有实现与本规范冲突时，以本规范为优先。
+- 如果修改会导致较大范围的架构调整，应先说明影响范围，再进行修改。
+
+### Springdoc 接口文档（条件规则）
+
+当项目中存在 Springdoc / OpenAPI 相关依赖或配置时，新增或修改 Controller 接口必须同步维护接口文档描述。
+
+**先检查项目依赖（pom.xml / build.gradle）中是否引入了 springdoc-openapi 相关依赖**，如果项目中存在以下任意情况，可视为已使用 Springdoc / OpenAPI：
+
+- `springdoc-openapi-starter-webmvc-ui`
+- `springdoc-openapi-starter-webflux-ui`
+- `springdoc-openapi-ui`
+- `io.swagger.v3.oas.annotations.*`
+- 已存在 `@Operation`、`@Parameter`、`@Schema` 等 OpenAPI 注解
+- 项目已有 Springdoc 相关配置
+
+**如果项目存在 Springdoc / OpenAPI，新增或修改每个 Controller 接口时必须同步维护 `@Operation`、`@Parameter`、`@Schema` 等接口文档信息，确保接口描述、参数说明与实际实现一致。**
+
+**如果项目存在 springdoc 依赖，则每个 Controller 接口方法必须补充以下文档注解：**
+
+#### 类级别
+- 使用 `@Tag(name = "xxx模块", description = "xxx模块接口")` 标注接口分组
+
+#### 方法级别
+- 使用 `@Operation(summary = "接口简述", description = "详细说明（可选）")` 描述接口用途
+- 每个请求参数（`@RequestParam`、`@PathVariable`）使用 `@Parameter(description = "参数说明", required = true/false)` 标注
+- 请求体参数（`@RequestBody`）对应的 DTO 类，字段上使用 `@Schema(description = "字段说明", example = "示例值")` 标注
+- 返回值需在 `@Operation` 或方法注释中说明返回结构含义（如有多种响应状态，使用 `@ApiResponses` 补充说明不同状态码含义）
+
+#### 示例
+
+```java
+@Tag(name = "用户管理", description = "用户信息增删改查接口")
+@RestController
+public class UserController {
+
+    @Operation(summary = "根据ID查询用户", description = "根据用户ID查询用户详细信息")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "查询成功"),
+        @ApiResponse(responseCode = "404", description = "用户不存在")
+    })
+    @GetMapping("/api/v1/users/{id}")
+    public Result<UserVO> get(
+        @Parameter(description = "用户ID", required = true) 
+        @PathVariable Long id) {
+        return Result.success(userService.get(id));
+    }
+
+    @Operation(summary = "创建用户")
+    @PostMapping("/api/v1/users")
+    public Result<UserVO> create(
+        @Valid @RequestBody UserCreateRequest req) {
+        return Result.success(userService.create(req));
+    }
+}
+
+// DTO 字段文档
+public class UserCreateRequest {
+    @Schema(description = "用户名", example = "zhangsan", requiredMode = Schema.RequiredMode.REQUIRED)
+    @NotBlank
+    private String username;
+
+    @Schema(description = "邮箱地址", example = "zhangsan@example.com")
+    @Email
+    private String email;
+}
+```
+
+#### 强制要求
+- ❌ 存在 springdoc 依赖但接口没有 `@Operation` / `@Tag` 注解 → 视为不合规，必须补充
+- ❌ 参数含义不明确（如枚举值、格式要求）却没有用 `description` 说明 → 必须补充
+- ✅ 如果项目未引入 springdoc 依赖，则跳过此项规则，不强制要求文档注解
+
+#### 返回值
+- 统一使用项目响应包装类（如 `Result<T>`），不允许直接返回裸对象
+
+## Service 层
+（补充规范）
+
+## 统一响应格式
+（补充规范）
+
+~~~
+
+##### `.claude/rules/openspec-workflow.md`
+
+**工作流级约束**，优先级应该高于具体编码风格。还可以在 `CLAUDE.md` 文件开头再加一条总规则强化：
+
+```markdown
+## 强制要求
+- 任何编码规范都不能绕过 OpenSpec 人工确认流程。
+- 涉及编码、修改、重构、修复前，必须先读取并遵守 OpenSpec 工作流规范。
+- 涉及 Java / Spring Boot 代码时，必须读取并遵守 Spring Boot 开发规范。
+- 如果规则之间发生冲突，以 OpenSpec 工作流约束优先于编码风格约束。
+- 即使用户要求直接修改代码，只要当前变更属于 OpenSpec 管理范围，也必须先检查 `proposal.md`、`design.md`、`tasks.md`。如果这些文档需要新增或修改，完成文档后必须停止，等待用户明确确认，禁止自动继续编码。
+```
+
+~~~markdown
+## OpenSpec 规范流程
+
+在进行任何编码、新增功能、修改代码、重构、修复缺陷之前，必须先检查项目中的 OpenSpec 规范流程文档。
+
+需要重点检查文档： `proposal.md`/`design.md`/`tasks.md`
+
+### 编码前检查要求
+
+在开始编码或修改代码前，必须完成以下检查：
+
+1. 检查当前需求是否存在对应的 OpenSpec 规范文档。
+2. 检查 `proposal.md` 是否已经描述当前需求的目标、范围和变更内容。
+3. 检查 `design.md` 是否与当前项目实际架构、代码结构、技术选型保持一致。
+4. 检查 `tasks.md` 是否与当前准备执行的开发任务保持一致。
+5. 检查 OpenSpec 文档描述与当前项目实际代码是否存在明显偏差。
+6. 检查 `proposal.md`、`design.md`、`tasks.md` 三者之间是否相互一致。
+7. 如果代码已经发生变化，需要判断 OpenSpec 文档是否已经同步更新。
+
+如果发现 OpenSpec 文档缺失、内容不完整、相互冲突或与当前项目代码不一致：
+
+* 禁止直接开始编码。
+* 应先指出具体不一致之处。
+* 应优先补充或修改对应的 OpenSpec 文档。
+* 文档修改完成后，必须停止后续编码流程。
+
+## OpenSpec 文档确认机制
+
+OpenSpec 规范文档属于需要人工确认的开发依据。
+
+当任意  `proposal.md`/`design.md`/`tasks.md` 文档被新建或修改后，必须等待用户手动确认。
+
+在用户明确确认之前：
+
+* 禁止根据 OpenSpec 文档自动开始编码。
+* 禁止自动执行 `tasks.md` 中的任务。
+* 禁止因为 `proposal.md`、`design.md`、`tasks.md` 已经完成就继续修改业务代码。
+* 禁止自动进入下一阶段开发流程。
+* 禁止将“文档已完成”视为“用户已批准执行”。
+
+必须明确区分：
+
+1. OpenSpec 文档编写阶段。
+2. 用户人工确认阶段。
+3. 编码执行阶段。
+
+三个阶段禁止自动串联执行。
+
+## 必须停止并等待确认的情况
+
+完成 OpenSpec 文档编写或修改后，应立即停止，并向用户说明：
+
+* 本次新增或修改了哪些 OpenSpec 文档。
+* 文档中的主要设计方案。
+* 与当前项目代码的同步情况。
+* 是否存在风险、冲突或需要特别确认的内容。
+
+然后等待用户明确给出类似以下指令：
+
+* `确认`
+* `确认执行`
+* `可以开始编码`
+* `按 tasks.md 执行`
+* `开始实现`
+* 其他明确表示批准进入编码阶段的指令
+
+只有收到明确的人工确认后，才允许开始修改业务代码。
+
+以下内容不能视为人工确认：
+
+* 用户要求“先看看怎么改”。
+* 用户要求“生成方案”。
+* 用户要求“完善 proposal”。
+* 用户要求“完善 design”。
+* 用户要求“生成 tasks”。
+* OpenSpec 文档已经成功生成。
+* Codex 自己判断方案合理。
+* Codex 自己认为任务已经足够明确。
+
+## 禁止自动执行 OpenSpec Tasks
+
+`tasks.md` 仅作为开发任务计划和执行依据，不代表已经获得执行授权。
+
+即使 `tasks.md` 中已经列出了完整任务，例如：
+
+```md
+- [ ] 新增 UserService
+- [ ] 新增用户创建接口
+- [ ] 增加 DTO 参数校验
+- [ ] 增加数据库迁移脚本
+- [ ] 编写单元测试
+```
+
+也禁止在完成 `tasks.md` 后自动开始执行这些任务。
+
+正确流程必须是：
+
+```text
+理解用户需求
+    ↓
+检查现有 OpenSpec 文档
+    ↓
+检查 OpenSpec 与当前项目代码是否一致
+    ↓
+新增 / 修改 proposal.md
+    ↓
+新增 / 修改 design.md
+    ↓
+新增 / 修改 tasks.md
+    ↓
+停止
+    ↓
+向用户汇报 OpenSpec 变更
+    ↓
+等待用户手动确认
+    ↓
+用户明确批准
+    ↓
+再次检查 OpenSpec 与项目当前状态
+    ↓
+按照已确认的 tasks.md 开始编码
+```
+
+禁止以下流程：
+
+```text
+需求
+ ↓
+生成 proposal.md
+ ↓
+生成 design.md
+ ↓
+生成 tasks.md
+ ↓
+自动开始编码
+```
+
+## 编码执行阶段要求
+
+用户明确批准编码后，在真正修改代码之前仍需要再次检查：
+
+1. `proposal.md` 是否仍然适用于当前需求。
+2. `design.md` 是否仍然与当前代码结构一致。
+3. `tasks.md` 是否仍然是最新版本。
+4. 用户确认之后，项目代码是否发生了新的变化。
+5. 是否存在其他人提交的代码导致设计或任务已经失效。
+
+如果确认后项目状态发生明显变化，导致 OpenSpec 文档已经不同步：
+
+* 暂停编码。
+* 说明变化内容。
+* 更新 OpenSpec 文档。
+* 更新完成后再次等待人工确认。
+
+禁止基于过期的 OpenSpec 文档继续开发。
+
+## 修改范围约束
+
+编码阶段只能执行已经人工确认的 OpenSpec 范围。
+
+* 不得擅自扩大 `proposal.md` 定义的需求范围。
+* 不得擅自修改 `design.md` 已确认的核心设计。
+* 不得添加 `tasks.md` 未包含的大规模重构任务。
+* 不得因为“顺便优化”而修改无关代码。
+* 如果实现过程中发现必须改变设计，应停止编码并先更新 OpenSpec 文档。
+* OpenSpec 文档变更后，必须重新等待用户确认。
+
+## Codex 强制行为规则
+
+当用户要求“实现”“修改”“开发”“修复”“重构”等代码变更时：
+
+1. 首先检查 OpenSpec 文档。
+2. 不允许直接开始修改代码。
+3. OpenSpec 不完整时，先处理 OpenSpec。
+4. OpenSpec 与代码不一致时，先同步 OpenSpec。
+5. OpenSpec 文档发生修改后，立即停止。
+6. 等待用户人工确认。
+7. 没有明确确认时，绝不自动执行 `tasks.md`。
+8. 只有人工确认后才能进入编码阶段。
+9. 编码只能执行已确认范围内的任务。
+10. 需要变更已确认设计时，重新进入 OpenSpec 文档阶段并再次等待确认。
+
+### 核心原则
+
+> OpenSpec 文档完成不等于允许编码。
+
+> `tasks.md` 是任务计划，不是执行授权。
+
+> OpenSpec 文档发生任何影响实现方案的修改后，必须由用户人工确认。
+
+> Codex 禁止自行批准 OpenSpec，禁止自动从文档阶段进入编码阶段。
+
+~~~
+
+Claude Code 读取 `CLAUDE.md` 时，如果引用了外部文件路径，通常需要明确提示或使用 `@` 引用语法让其加载完整内容（不同版本行为略有差异，建议用 `/init` 或直接在对话中确认 Claude 是否已读取该文件）。
+
+------
+
+#### 生效范围对照
+
+| 位置                        | 生效范围           | 是否建议提交 git           |
+| --------------------------- | ------------------ | -------------------------- |
+| `~/.claude/CLAUDE.md`       | 你本机所有项目     | 不提交（本机个人习惯）     |
+| `<项目>/CLAUDE.md`          | 仅该项目，团队共享 | **建议提交**，团队统一规范 |
+| `<项目>/.claude/rules/*.md` | 仅该项目，按需引用 | 建议提交                   |
+
 ### Claude HUD插件安装
 
 [claude hud命令行插件](https://github.com/jarrodwatts/claude-hud)：在输入框下展示上下文使用情况、活动工具、正在运行的代理和待办事项进度。
@@ -452,7 +901,36 @@ Claude Code 配置文件（可以支持国内阿里百炼等AI语言模型接入
 
 **Codex** 是 OpenAI 推出的 AI Agent（智能代理）产品，最初是一个专门用于代码生成的模型，如今已经发展成能够执行实际工作的智能助手。它不仅能写代码，还能操作文件、运行工作流、生成文档、处理数据等任务。
 
+### Codex约束规范
 
+Codex 原生会自动读取 `~/codex/AGENTS.md` / `.codex/AGENTS.md` 
+
+用户级文件列表
+
+```markdown
+~/.codex/
+├── AGENTS.md
+└── rules/
+    ├── openspec-workflow.md
+    └── springboot-preferences.md
+```
+
+`AGENTS.md` 保持很短：
+
+```
+# 全局开发规则
+
+执行任务前，必须遵守以下规则文件：
+
+- OpenSpec 工作流规范：`~/.codex/rules/openspec-workflow.md`
+- Spring Boot 开发规范：`~/.codex/rules/springboot-preferences.md`
+
+## 强制要求
+
+- 涉及编码、修改、重构、修复前，必须先读取并遵守 OpenSpec 工作流规范。
+- 涉及 Java / Spring Boot 代码时，必须读取并遵守 Spring Boot 开发规范。
+- 如果规则之间发生冲突，以 OpenSpec 工作流约束优先于编码风格约束。
+```
 
 ## 本地大模型安装
 

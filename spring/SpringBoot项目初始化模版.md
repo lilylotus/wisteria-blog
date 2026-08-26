@@ -1260,6 +1260,7 @@ services:
       - --collation-server=utf8mb4_general_ci
       - --max_connections=1000
       - --lower_case_table_names=1
+      - --host_cache_size=0
     environment:
       MYSQL_ROOT_PASSWORD: mysql
       MYSQL_DATABASE: test
@@ -1295,8 +1296,9 @@ services:
       - middleware-net
 
   nacos:
+    # docker pull nacos/nacos-server:v3.2.3
     image: nacos/nacos-server:v2.5.2
-    container_name: nacos-server
+    container_name: middleware-nacos-server
     restart: unless-stopped
     environment:
       MODE: standalone
@@ -1311,7 +1313,7 @@ services:
       # MYSQL_SERVICE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
 
       # 鉴权(2.5.1起强烈建议开启，不开的话默认无认证任何人可读写配置)
-      NACOS_AUTH_ENABLE: "true"
+      NACOS_AUTH_ENABLE: "false"
       # abcdef1234567890abcdef1234567890
       NACOS_AUTH_TOKEN: "YWJjZGVmMTIzNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTAK"
       NACOS_AUTH_IDENTITY_KEY: "nacos"
@@ -1323,6 +1325,7 @@ services:
       JVM_XMN: 256m
     volumes:
       - ./nacos-logs:/home/nacos/logs
+      - ./nacos-data:/home/nacos/data
     ports:
       - "8848:8848"    # 主端口: 控制台 + OpenAPI
       - "9848:9848"    # gRPC端口(客户端SDK使用，2.x起必须开放，否则服务注册/配置监听会失败)
