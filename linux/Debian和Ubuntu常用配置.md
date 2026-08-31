@@ -1,3 +1,24 @@
+---
+title: "Debian/Ubuntu安装初始化配置"
+subtitle: "Debian/Ubuntu安装初始化配置"
+description: "Debian/Ubuntu安装初始化配置|基础设置"
+date: 2026-08-31T22:00:00+08:00
+lastmod: 2026-08-31T22:00:00+08:00
+draft: false
+
+authors: ["yzx"]
+tags: ["AI", "OpenSpec","Claude Code"]
+categories: ["AI"]
+series: []
+
+featuredImage: "https://www.nihility.cn/files/images/IMG_2343.JPG"
+featuredImagePreview: ""
+
+lightgallery: true
+math:
+  enable: true
+---
+
 # Debain/Ubuntu配置
 
 ## Ubuntu静态IP配置
