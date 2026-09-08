@@ -210,6 +210,60 @@ systemctl status nginx
 systemctl start nginx
 ```
 
+## nginx容器启动
+
+### 部署脚本
+
+```bash
+#!/bin/bash
+
+mkdir -p ./nginx/{conf.d,html}
+
+echo '<h1>hello</h1>' > nginx/html/index.html
+
+cat <<EOF > nginx/conf.d/default.conf
+server {
+    listen       80;
+    server_name  localhost;
+
+    location / {
+        root   /usr/share/nginx/html;
+        index  index.html index.htm;
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+        root   /usr/share/nginx/html;
+    }
+}
+EOF
+```
+
+### docker-compose.yaml
+
+```yaml
+networks:
+  nginx-network:
+    driver: bridge
+
+volumes:
+  nginx_log:
+
+services:
+  nginx:
+    image: nginx:1.28
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/html:/usr/share/nginx/html
+      - nginx_log:/var/log/nginx
+    environment:
+      - TZ=Asia/Shanghai
+```
+
 ## nginx 配置文件
 
 ### 在线配置生成链接

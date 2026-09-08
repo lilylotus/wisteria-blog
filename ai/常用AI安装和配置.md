@@ -685,6 +685,177 @@ Claude Code 读取 `CLAUDE.md` 时，如果引用了外部文件路径，通常�
 /claude-hud:setup
 ```
 
+### Claude Code 安装 Word 文档处理能力（docx Skill）指南
+
+Claude Code 官方提供了处理 Word / Excel / PPT / PDF 文档的技能包（`document-skills`），其中 `docx` 部分专门用于创建、编辑、分析 Word 文档，支持目录、页眉页脚、表格、修订追踪、批注管理等专业排版能力。
+
+安装方式分为两种：**插件市场安装（官方推荐）** 和 **离线手动安装**。若插件市场方式遇到问题（如 Windows 下常见的权限报错），可直接使用离线方式。
+
+------
+
+#### 方式一：插件市场安装（官方推荐）
+
+##### 1. 添加官方 Skills 仓库为 marketplace
+
+```
+/plugin marketplace add anthropics/skills
+```
+
+##### 2. 安装 document-skills 插件
+
+```
+/plugin install document-skills@anthropic-agent-skills
+```
+
+> 注意格式：`插件名@marketplace名`，中间用 `@` 连接，不能有空格。
+
+##### 3. 激活插件（如提示需要）
+
+若安装完成后提示 `Run /reload-plugins to activate.`，执行：
+
+```
+/reload-plugins
+```
+
+##### 4. 验证安装
+
+```
+/plugin marketplace list   # 确认 anthropic-agent-skills 已注册
+/plugin list               # 确认 document-skills 已安装
+```
+
+##### 方式一的常见报错与排查（Windows 环境高发）
+
+###### 报错：`EPERM: operation not permitted, rename ...`
+
+```
+Error: Failed to finalize marketplace cache. Please manually delete the directory at
+C:\Users\<用户名>\.claude\plugins\marketplaces\anthropic-agent-skills if it exists and try again.
+```
+
+**原因**：Claude Code 先将仓库克隆到临时目录，最后重命名为正式目录名时被 Windows 拒绝。常见诱因：杀毒软件/Defender 实时扫描锁定新文件、云同步软件（OneDrive等）监控冲突、Node.js 在 Windows 下的 rename 操作对权限更敏感。
+
+**排查步骤**：
+
+1. 完全退出所有 Claude Code 进程/窗口
+
+2. 手动删除残留目录（PowerShell，非管理员即可尝试）：
+
+   ```powershell
+   Remove-Item -Recurse -Force "C:\Users\<用户名>\.claude\plugins\marketplaces\anthropic-agent-skills" -ErrorAction SilentlyContinueRemove-Item -Recurse -Force "C:\Users\<用户名>\.claude\plugins\marketplaces\anthropics-skills" -ErrorAction SilentlyContinue
+   ```
+
+3. 确认删除干净：
+
+   ```powershell
+   dir "C:\Users\<用户名>\.claude\plugins\marketplaces\"
+   ```
+
+4. 若普通删除失败，以管理员身份打开 PowerShell 强制处理：
+
+   ```powershell
+   takeown /f "C:\Users\<用户名>\.claude\plugins\marketplaces\anthropic-agent-skills" /r /d yicacls "C:\Users\<用户名>\.claude\plugins\marketplaces\anthropic-agent-skills" /grant Administrators:F /tRemove-Item -Recurse -Force "C:\Users\<用户名>\.claude\plugins\marketplaces\anthropic-agent-skills"
+   ```
+
+5. 重新执行 `/plugin marketplace add anthropics/skills`
+
+**若重试多次仍反复出现同样报错**：说明问题不是残留目录，而是运行时实时冲突（安全软件/同步软件持续锁定新建文件），建议直接改用**方式二：离线安装**，无需再纠结这个问题。
+
+------
+
+#### 方式二：离线手动安装（绕开插件系统，最可靠）
+
+原理：`/plugin install` 本质就是把仓库中的 Skill 文件夹放到 Claude Code 能扫描到的目录下。手动完成同样的操作即可达到相同效果，且不经过容易在 Windows 上出问题的 marketplace 自动重命名流程。
+
+##### 1. 手动克隆官方仓库到临时目录
+
+不要克隆到 `.claude` 目录内，避免触发同样的文件锁定问题：
+
+```powershell
+git clone https://github.com/anthropics/skills.git C:\temp\anthropic-skills
+```
+
+##### 2. 查看仓库内实际的 skill 目录结构
+
+```powershell
+dir C:\temp\anthropic-skills\skills
+```
+
+确认 `docx`（以及如需要的 `pdf`、`pptx`、`xlsx`）文件夹的准确名称。
+
+##### 3. 创建个人 Skills 目录（如不存在）
+
+```powershell
+mkdir "C:\Users\<用户名>\.claude\skills" -Force
+```
+
+##### 4. 复制所需技能文件夹
+
+```powershell
+# 仅 Word 处理能力
+Copy-Item -Recurse "C:\temp\anthropic-skills\skills\docx" "C:\Users\<用户名>\.claude\skills\docx"
+
+# 如需一并安装 PDF / PPT / Excel 处理能力
+Copy-Item -Recurse "C:\temp\anthropic-skills\skills\pdf"  "C:\Users\<用户名>\.claude\skills\pdf"
+Copy-Item -Recurse "C:\temp\anthropic-skills\skills\pptx" "C:\Users\<用户名>\.claude\skills\pptx"
+Copy-Item -Recurse "C:\temp\anthropic-skills\skills\xlsx" "C:\Users\<用户名>\.claude\skills\xlsx"
+```
+
+##### 5. 确认目录结构
+
+```powershell
+dir "C:\Users\<用户名>\.claude\skills"
+```
+
+每个技能文件夹下应包含一个 `SKILL.md` 文件（Claude Code 识别 Skill 的核心标识文件）。
+
+##### 6. 重新打开 Claude Code 会话验证
+
+个人 Skills 目录下的内容会被自动识别加载，无需额外命令，直接测试：
+
+```
+帮我创建一个测试用的 Word 文档，标题是"测试文档"
+```
+
+若能正常生成并提供 `.docx` 文件下载，说明安装成功。
+
+------
+
+#### 两种方式对比
+
+| 对比项           | 方式一：插件市场安装                   | 方式二：离线手动安装                        |
+| ---------------- | -------------------------------------- | ------------------------------------------- |
+| 操作复杂度       | 低（两条命令）                         | 中（需手动克隆、复制）                      |
+| Windows 权限问题 | 较易触发 EPERM 报错                    | 不涉及 marketplace 重命名逻辑，基本不受影响 |
+| 后续更新         | `/plugin` 系统统一管理                 | 需手动 `git pull` 后重新复制覆盖            |
+| 适用场景         | 网络环境正常、Windows 权限无异常的机器 | 插件市场方式反复失败时的可靠替代方案        |
+
+------
+
+#### 安装完成后的使用方式
+
+无需记忆任何命令，直接用自然语言描述需求，Claude Code 会自动匹配并调用对应 Skill：
+
+```
+帮我生成一份项目验收报告，要求有目录、页眉页脚，导出成 Word
+
+把这份文档里所有的"甲方"批量替换成"乙方"
+
+检查这份合同文档里的修订记录，帮我总结审阅意见
+```
+
+##### docx Skill 支持的核心能力
+
+- 创建 / 读取 / 编辑 `.docx` 文件
+- 目录（TOC）自动生成
+- 页眉页脚、表格、超链接、脚注
+- 修订追踪（Track Changes）与批注管理
+- 图片插入、多栏布局
+- 旧版 `.doc` 转 `.docx`
+
+
+
+
 ### Claude Code前端设计插件安装
 
 [Anthropic 官方开源的 frontend-design skill](https://github.com/anthropics/claude-code/blob/main/plugins/frontend-design/skills/frontend-design/SKILL.md)

@@ -217,6 +217,141 @@ systemctl status rabbitmq-server
 systemctl start rabbitmq-server
 ```
 
+### 容器化安装
+
+#### 部署脚本
+
+```bash
+#!/bin/bash
+
+mkdir -p ./rabbitmq/{data,logs,plugins,conf}
+
+# ./rabbitmq/conf/rabbitmq.conf
+cat <<EOF > ./rabbitmq/conf/rabbitmq.conf
+# 网络设置
+listeners.tcp.default = 5672
+management.tcp.port = 15672
+# 磁盘和内存限制
+vm_memory_high_watermark.relative = 0.7
+disk_free_limit.absolute = 2GB
+# 策略设置
+default_user = rabbitmq
+default_pass = rabbitmq
+# 日志设置
+log.console.level = info
+log.file.level = info
+# 性能优化
+channel_max = 2047
+heartbeat = 60
+frame_max = 131072
+EOF
+
+# ./rabbitmq/conf/definitions.json
+cat <<EOF > ./rabbitmq/conf/definitions.json
+{"users":[{"name":"rabbitmq","password":"rabbitmq","tags":"administrator"}],"vhosts":[{"name":"/"}],"permissions":[{"user":"rabbitmq","vhost":"/","configure":".*","write":".*","read":".*"}],"queues":[],"exchanges":[],"bindings":[]}
+EOF
+
+#groupadd -g 999 rabbitmq
+#useradd -u 999 -g 999 rabbitmq
+#chown -R 999:999 ./rabbitmq
+```
+
+#### rabbitmq3x docker-compose.yaml
+
+```yaml
+networks:
+  rabbitmq-network:
+    driver: bridge
+
+# Failed to create cookie file '/var/lib/rabbitmq/.erlang.cookie': eacces
+# 容器内 RabbitMQ 进程运行的用户（rabbitmq，通常 UID 999）不匹配
+volumes:
+  rabbitmq_data:
+  rabbitmq_log:
+
+services:
+  rabbitmq-server:
+    image: rabbitmq:3.13.7-management
+    container_name: rabbitmq-server
+    hostname: rabbitmq-server
+    environment:
+      # 默认用户名密码
+      RABBITMQ_DEFAULT_USER: "rabbitmq"
+      RABBITMQ_DEFAULT_PASS: "rabbitmq"
+      # 启用管理插件
+      RABBITMQ_DEFAULT_VHOST: "/"
+      # Optional tuning
+      RABBITMQ_ERLANG_COOKIE: "my_secret_cookie_618512cc090a990423207be5"
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Web UI
+    volumes:
+      # mkdir -p ./rabbitmq/{data,logs,plugins,conf}
+      # chown -R 999:999 ./rabbitmq
+      #- ./rabbitmq/init.sh:/init.sh
+      # https://github.com/rabbitmq/rabbitmq-delayed-message-exchange 
+      # 从 4.3+ 版本开始，RabbitMQ 官方已经内置了 rabbitmq_delayed_message_exchange 插件，无需单独安装。
+      # rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+      #- ./rabbitmq/data:/var/lib/rabbitmq
+      - rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_log:/var/log/rabbitmq
+      #- ./rabbitmq/plugins/rabbitmq_delayed_message_exchange-3.13.0.ez:/opt/rabbitmq/plugins/rabbitmq_delayed_message_exchange-3.13.0.ez
+      - ./rabbitmq/conf/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - ./rabbitmq/conf/definitions.json:/etc/rabbitmq/definitions.json
+    user: "999:999"  # 指定 RabbitMQ 的用户 ID
+    # /bin/sh /opt/rabbitmq/sbin/rabbitmq-server
+    # command: /bin/bash -c "rabbitmq-plugins enable rabbitmq_delayed_message_exchange ; rabbitmq-server"
+    command:
+      - bash
+      - -c
+      - |
+        #rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+        rabbitmq-server
+    restart: always
+    networks:
+      - rabbitmq-network
+```
+
+#### rabbitmq4.x docker-compose.yml
+
+```yaml
+networks:
+  rabbitmq-network:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+  rabbitmq_log:
+
+services:
+  rabbitmq:
+    image: rabbitmq:4.2.2-management
+    container_name: rabbitmq
+    hostname: rabbitmq-node1
+    restart: always
+    ports:
+      - "5672:5672"      # AMQP
+      - "15672:15672"    # Web UI
+    environment:
+      RABBITMQ_DEFAULT_USER: rabbitmq
+      RABBITMQ_DEFAULT_PASS: rabbitmq
+      RABBITMQ_DEFAULT_VHOST: /
+      # Erlang cluster cookie (important)
+      RABBITMQ_ERLANG_COOKIE: "my_secret_cookie_618512cc090a990423207be5"
+    user: "999:999"
+    volumes:
+      # mkdir -p ./rabbitmq/{data,logs,plugins,conf}
+      # chown -R 999:999 ./rabbitmq
+      # - ./rabbitmq/data:/var/lib/rabbitmq
+      # - ./rabbitmq/logs:/var/log/rabbitmq
+      - rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_log:/var/log/rabbitmq
+    networks:
+      - rabbitmq-network
+```
+
+
+
 ## RabbitMQ安装初始化操作
 
 ### 启用WEB管理界面
