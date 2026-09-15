@@ -1,3 +1,24 @@
+---
+title: "Redis哨兵、集群部署"
+subtitle: "Redis哨兵、集群部署配置说明"
+description: "Redis哨兵、集群部署配置说明"
+date: 2025-01-07T22:36:09+08:00
+lastmod: 2025-01-07T22:36:09+08:00
+draft: false
+
+authors: ["yzx"]
+tags: ["redis","中间件"]
+categories: ["redis","中间件"]
+series: []
+
+featuredImage: "https://www.nihility.cn/files/images/20250107.png"
+featuredImagePreview: ""
+
+lightgallery: true
+math:
+  enable: true
+---
+
 # Redis哨兵、集群部署
 
 ## Redis哨兵部署
@@ -99,7 +120,7 @@ EOF
 #### redis配置
 
 ```
-port 6380
+port 6379
 bind 0.0.0.0
 protected-mode no
 requirepass redis
