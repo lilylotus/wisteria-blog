@@ -3,7 +3,7 @@ title: "RabbitMQ安装和简单配置说明"
 subtitle: "RabbitMQ安装|RabbitMQ简单配置说明"
 description: "RabbitMQ安装|RabbitMQ简单配置说明"
 date: 2025-01-16T23:36:09+08:00
-lastmod: 2025-01-18T23:36:09+08:00
+lastmod: 2026-09-15T22:36:09+08:00
 draft: false
 
 authors: ["yzx"]

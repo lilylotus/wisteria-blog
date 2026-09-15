@@ -1,9 +1,9 @@
 ---
-title: "Redis哨兵、集群部署"
-subtitle: "Redis哨兵、集群部署配置说明"
-description: "Redis哨兵、集群部署配置说明"
-date: 2025-01-07T22:36:09+08:00
-lastmod: 2025-01-07T22:36:09+08:00
+title: "Redis哨兵/集群部署"
+subtitle: "Redis哨兵/集群部署配置说明"
+description: "Redis哨兵/集群部署配置说明"
+date: 2026-09-15T22:36:09+08:00
+lastmod: 2026-09-15T22:36:09+08:00
 draft: false
 
 authors: ["yzx"]
@@ -11,7 +11,7 @@ tags: ["redis","中间件"]
 categories: ["redis","中间件"]
 series: []
 
-featuredImage: "https://www.nihility.cn/files/images/20250107.png"
+featuredImage: "https://www.nihility.cn/files/images/IMG_0256.JPG"
 featuredImagePreview: ""
 
 lightgallery: true

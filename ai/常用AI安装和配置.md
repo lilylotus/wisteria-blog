@@ -1163,3 +1163,162 @@ ollama ps
 # qwen3.5:4b    2a654d98e6fb    3.1 GB    100% GPU     4096       3 minutes from now
 ```
 
+### llama.cpp
+
+[llama.cpp github 链接](https://github.com/ggml-org/llama.cpp)
+
+#### llama安装
+
+查看 n 卡信息
+
+```powershell
+# 确认GPU能被正常识别
+nvidia-smi
+# | NVIDIA-SMI 582.66  Driver Version: 582.66  CUDA Version: 13.0 |
+
+# 查看 llama 安装是否成功
+llama-cli --version
+```
+
+[Windows x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/b10938/llama-b10938-bin-win-cuda-12.4-x64.zip) - [CUDA 12.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/b10938/cudart-llama-bin-win-cuda-12.4-x64.zip)
+
+下载后解压到同一目录
+
+#### 模型下载
+
+[魔塔社区模型库链接](https://modelscope.cn/models)
+
+[混元翻译模型-腾讯翻译模型](https://modelscope.cn/models/Tencent-Hunyuan/HY-MT1.5-1.8B-GGUF)
+
+```bash
+# 下载指定模型 HY-MT1.5-1.8B-Q8_0.gguf
+modelscope download --model Tencent-Hunyuan/HY-MT1.5-1.8B-GGUF HY-MT1.5-1.8B-Q8_0.gguf --local_dir ./model
+
+modelscope download --model unsloth/Qwen3-4B-GGUF Qwen3-4B-BF16.gguf --local_dir ./model
+
+modelscope download --model unsloth/Qwen3-4B-GGUF Qwen3-4B-Q8_0.gguf --local_dir ./model
+
+modelscope download --model unsloth/Qwen3-4B-GGUF Qwen3-4B-Q4_K_M.gguf Qwen3-4B-Q4_K_S.gguf  --local_dir ./
+```
+
+#### 运行模型
+
+```bash
+#llama加载大模型指令
+llama-server -m ./HY-MT1.5-1.8B-Q8_0.gguf -c 16384 --port 8080 -ngl 999 --host 0.0.0.0
+
+llama-server -m ./Qwen3-4B-BF16.gguf -c 16384 --port 8080 -ngl 999 --host 0.0.0.0
+llama-server -m ./Qwen3-4B-Q4_K_M.gguf -c 16384 --port 8080 -ngl 999 --host 0.0.0.0
+```
+
+#### Deepseek Harness
+
+[Deepseek Harness官网链接](https://www.deepseek.com/harness/en/)
+
+```bash
+npx @deepseek-ai/dsh web
+```
+
+#### 对接Claude Code
+
+##### 核心障碍：协议不兼容
+
+Claude Code 默认只认 **Anthropic Messages API** 格式，而 `llama-server` 暴露的是 **OpenAI兼容格式**（`/v1/chat/completions`）。两者请求体结构、工具调用（tool use）的表达方式都不一样，**不能直接把 `ANTHROPIC_BASE_URL` 指向 `http://localhost:8080` 了事**，必须中间加一层协议转换网关：
+
+```
+Claude Code (Anthropic格式) → 本地转换网关 → llama-server (OpenAI兼容格式)
+```
+
+##### 用 claude-code-router 做转换网关
+
+社区维护的 `claude-code-router`（CCR）就是干这个的，明确支持接入OpenAI兼容的本地后端（包括llama.cpp、Ollama、LM Studio）：
+
+bash
+
+```bash
+npm install -g @musistudio/claude-code-router
+```
+
+配置文件 `~/.claude-code-router/config.json`：
+
+```json
+{
+  "APIKEY": "localhost",
+  "Providers": [
+    {
+      "name": "local-llama",
+      "api_base_url": "http://localhost:8080/v1/chat/completions",
+      "api_key": "not-needed",
+      "models": ["Qwen3-4B"]
+    }
+  ],
+  "Router": {
+    "default": "local-llama,Qwen3-4B"
+  }
+}
+```
+
+启动网关：
+
+```bash
+ccr start
+# 重启
+ccr stop && ccr start
+```
+
+然后让 Claude Code 指向这个本地网关而不是Anthropic官方地址：
+
+```bash
+export ANTHROPIC_BASE_URL="http://127.0.0.1:3456"
+export ANTHROPIC_API_KEY="anything"   # 走本地网关不校验，随便填
+claude
+```
+
+##### llama-server 启动命令必须补几个参数
+
+```bash
+llama-server -m ./Qwen3-4B-Q4_K_M.gguf -c 47173 --port 8080 -ngl 999 --host 0.0.0.0 --jinja
+
+# 16k
+llama-server -m ./Qwen3-4B-Q4_K_M.gguf -c 20815 --port 8080 -ngl 999 --host 0.0.0.0 --jinja
+
+llama-server -m ./Qwen3-4B-Q4_K_M.gguf -c 40960 --port 8080 -ngl 999 --host 0.0.0.0 --jinja
+```
+
+- **缺 `--jinja`**：Claude Code的本质是"疯狂调用工具"（读文件、写文件、跑命令），这依赖 **Function Calling**，llama-server只有加了 `--jinja` 才会启用工具调用解析。不加这个参数，Claude Code发的工具定义模型根本理解不了，Edit/Bash/Read这些核心能力全部失效。
+
+- **`-c 16384` 明显不够**：Claude Code每次请求都会带上系统提示词（本身就有大几千token）+ 所有工具的schema定义 + 当前对话历史 + 打开的文件内容，实际留给对话内容的空间被压缩得很厉害，前面你已经踩过一次"47173 tokens超限"的坑了。建议至少给到 `-c 32768`，有富余更好。
+
+- **不要加 `-fa`（Flash Attention）**：结合你前面确认过的 compute capability 6.1（Pascal架构），这块卡不支持Flash Attention，硬开会报错或者性能反而更差，保持现在不加的状态就对。
+
+`-ngl 999` 是"能卸多少层卸多少层"的写法，4B模型这么小完全没问题，前面提到的显存问题主要出现在大上下文+老显卡的组合上，注意观察`nvidia-smi`确认没有OOM。
+
+##### 对接测试
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "content-type: application/json" \
+  -H "Authorization: Bearer 你启动时设置的api-key" \
+  -d '{"model":"Qwen3-4B","messages":[{"role":"user","content":"你好"}]}'
+```
+
+
+
+##### Claude Code配置
+
+`.claude/settings.json` 配置
+
+```json
+{
+    "env": {
+        "ANTHROPIC_AUTH_TOKEN": "<CCR配置的APIKEY>",
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:3456",
+        "ANTHROPIC_MODEL": "Qwen3-4B",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "Qwen3-4B",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "Qwen3-4B",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "Qwen3-4B",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "Qwen3-4B"
+    }
+}
+```
+
