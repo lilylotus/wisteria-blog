@@ -385,6 +385,7 @@ cluster_partition_handling = pause_minority
 
 # 全局默认队列类型设为quorum（重点！）
 # 有了这行，Spring Boot声明队列时可以不用每次都加 x-queue-type: quorum 参数
+# 3.8.3 上这行配置不会被识别（3.12+才有），RabbitMQ会当作未知配置项忽略,不会报错但也完全不生效
 default_queue_type = quorum
 
 # 管理界面监听
@@ -406,7 +407,7 @@ done
 
 `rabbitmq_prometheus`：可选，方便后续接入监控，不需要可以去掉
 
-`default_queue_type = quorum` 是 RabbitMQ 3.11+ 引入的能力，等于在**服务端**统一兜底：如果Spring Boot那边声明队列时忘了加参数，也会默认建成Quorum Queue而不是Classic Queue。**这不代表可以不改代码**——如果你的Bean声明里已经显式写了别的类型（或者干脆没传`arguments`导致走了老版本客户端的默认行为），还是以代码里显式指定的为准，这行更多是"托底"而不是"替代显式声明"。
+`default_queue_type = quorum` 是 **RabbitMQ 3.11+** 引入的能力，等于在**服务端**统一兜底：如果Spring Boot那边声明队列时忘了加参数，也会默认建成Quorum Queue而不是Classic Queue。**这不代表可以不改代码**——如果你的Bean声明里已经显式写了别的类型（或者干脆没传`arguments`导致走了老版本客户端的默认行为），还是以代码里显式指定的为准，这行更多是"托底"而不是"替代显式声明"。
 
 ```java
 @Bean
@@ -641,6 +642,7 @@ name    default_queue_type
 
 ```bash
 # 更新默认vhost的default_queue_type元数据...
+# 3.8.3 上这条命令不存在（3.11+才有）
 docker exec rabbitmq1 rabbitmqctl update_vhost_metadata / --default-queue-type quorum
 ```
 
@@ -701,6 +703,46 @@ docker exec -it rabbitmq1 rabbitmqctl list_queues name type leader members
 ```
 
 如果这一整套走下来，Spring Boot那边只是出现短暂的连接重试日志（类似我们之前分析过的`Channel shutdown`/`Restarting Consumer`），没有真正的消息丢失、服务在几秒内自动恢复，就说明整个方案——**从RabbitMQ集群本身的Quorum Queue机制,到Spring Boot侧的多节点连接配置+Publisher Confirm+手动ACK配合**——是真正端到端跑通了的。
+
+
+
+#### 3.8.3版本
+
+##### 查询当前Leader
+
+```bash
+# 查询当前 Leader（主节点）所在位置——3.8.3上的可用方式
+docker exec -it rabbitmq1 rabbitmqctl list_queues name type pid
+```
+
+```
+Timeout: 60.0 seconds ...
+Listing queues for vhost / ...
+name    type    pid
+order.queue     quorum  <rabbit@rabbitmq1.1.1896.0>
+order.dlx.queue quorum  <rabbit@rabbitmq1.1.1959.0>
+```
+
+##### HA验证
+
+```bash
+# 1. 记录当前leader
+docker exec -it rabbitmq1 rabbitmqctl list_queues name type pid
+
+# 2. 停掉leader所在的那个节点(根据上面结果确定,假设是rabbitmq1)
+docker stop rabbitmq1
+
+# 3. 从存活节点查看leader是否已自动切换
+docker exec -it rabbitmq2 rabbitmqctl list_queues name type pid
+
+# 4. 用Spring Boot应用发消息，确认confirmCallback只是短暂重试后恢复,没有真正丢消息
+
+# 5. 恢复节点
+docker start rabbitmq1
+docker exec -it rabbitmq1 rabbitmqctl cluster_status
+```
+
+
 
 ## RabbitMQ安装初始化操作
 
