@@ -382,248 +382,595 @@ server {
 
 自签生成服务端、客户端证书
 
+脚本用法
+
+```bash
+# 参数可重复使用
+bash gen_nginx_certs.sh --domain example.com --ip 192.168.1.100
+bash gen_nginx_certs.sh -d example.com -d www.example.com -i 192.168.1.100
+bash gen_nginx_certs.sh -d "*.example.com" --no-client
+```
+
+`gen_nginx_certs.sh` openssl 自签脚本
+
 ```bash
 #!/bin/bash
-# ========================================
-# 自签HTTPS证书生成脚本 (服务端证书 + 客户端证书，支持mTLS双向认证)
 #
-# 原理: 自建一个本地CA，用这个CA分别签发:
-#   1. 服务端证书 -> 配置到Nginx/Web服务器，浏览器访问时验证服务端身份
-#   2. 客户端证书 -> 导入浏览器个人证书库，服务端验证客户端身份(双向认证)
-#   浏览器只需信任这一个CA根证书，之后CA签发的服务端证书就不会有警告；
-#   如果服务端开启了mTLS强制校验客户端证书，浏览器还需导入客户端证书
-#   才能正常访问(访问时浏览器会弹窗要求选择用哪个客户端证书)。
+# gen_nginx_certs.sh - 自签 Nginx 证书生成脚本
+# 功能：生成 CA、服务端证书（支持 IP 或域名）、客户端证书
+# 特性：导入 CA 到浏览器信任后，不再报安全问题
+#       每次签发的 CA 名称为 "Self-Signed CA + 随机字符串"，避免与已导入的旧 CA 重名
 #
-# 用法: ./make-cert.sh <域名或IP> [域名或IP2] ...
-# 示例: ./make-cert.sh example.local 10.4.100.123 127.0.0.1
-# ========================================
-set -e
+# 用法:
+#   ./gen_nginx_certs.sh --domain example.com [--ip 192.168.1.100] [--client] [--no-ca-password]
+#
+# 依赖: openssl
+#
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-echo "Script directory: [$SCRIPT_DIR]"
-cd ${SCRIPT_DIR}
+set -euo pipefail
+set -o errtrace   # 让 ERR trap 在函数内也生效
 
-if [ $# -eq 0 ]; then
-    echo "用法: $0 <域名或IP> [域名或IP2] ..."
-    echo "示例: $0 example.local 10.4.100.123 127.0.0.1"
-    exit 1
-fi
+# 错误追踪：在退出时打印出错的函数和行号
+trap 'log_error "脚本在 ${FUNCNAME:-main} 函数第 $LINENO 行出错（返回值 $?），请检查上方错误信息"' ERR
 
-WORK_DIR=./certs
+# ======================== 默认配置 ========================
+CA_DAYS=3650          # CA 有效期（10年）
+SERVER_DAYS=3650      # 服务端证书有效期（10年）
+CLIENT_DAYS=3650      # 客户端证书有效期（10年）
+KEY_SIZE=2048         # RSA 密钥长度
+CA_PASSWORD=""        # CA 私钥密码（默认空，可选设置）
+CA_NAME_PREFIX="Self-Signed CA"   # CA 名称前缀
+CA_NAME=""            # 本次签发的 CA 名称（运行时生成：前缀 + 随机字符串）
+OUTPUT_DIR="output"   # 输出目录
 
-rm -rf ${WORK_DIR} ; mkdir -p ${WORK_DIR}/{ca,server,client}
+# SAN 配置
+DOMAINS=()
+IPS=()
 
-CA_KEY="$WORK_DIR/ca/ca.key"
-CA_CRT="$WORK_DIR/ca/ca.crt"
-# /C=US/ST=California/L=San Francisco/O=My Root CA/CN=My Root CA
-# C=国家/ST=地区或省份/L=地区局部名/O=机构名称/OU=组织单位名称/CN=网站域名/emailAddress=邮箱
-CA_SUBJECT="/C=CN/ST=Shanghai/L=Shanghai/O=Local Dev CA/OU=Sign/CN=Local Development Root CA"
+# 是否生成客户端证书（默认生成）
+GEN_CLIENT=true
 
-SERVER_KEY="$WORK_DIR/server/server.key"
-SERVER_CSR="$WORK_DIR/server/server.csr"
-SERVER_CRT="$WORK_DIR/server/server.crt"
-SERVER_EXT="$WORK_DIR/server/server.ext"
+# ======================== 函数定义 ========================
+usage() {
+    cat <<EOF
+用法: $0 [选项]
 
-CLIENT_KEY="$WORK_DIR/client/client.key"
-CLIENT_CSR="$WORK_DIR/client/client.csr"
-CLIENT_CRT="$WORK_DIR/client/client.crt"
-CLIENT_EXT="$WORK_DIR/client/client.ext"
-CLIENT_P12="$WORK_DIR/client/client.p12"
+选项:
+  -d, --domain <域名>    服务端域名（可重复指定）
+  -i, --ip <IP地址>      服务端 IP 地址（可重复指定）
+  -c, --client           包含客户端证书（默认已包含）
+      --no-client        跳过客户端证书生成
+  -o, --output <目录>    输出目录（默认: $OUTPUT_DIR）
+      --ca-password      设置 CA 私钥密码
+      --no-ca-password   不设置 CA 私钥密码（默认）
+  -h, --help             显示帮助
 
-CLIENT_P12_PASSWORD="123456"   # 客户端p12证书导入密码，可自行修改
+示例:
+  $0 --domain example.com --ip 192.168.1.100
+  $0 -d example.com -d www.example.com -i 192.168.1.100
+  $0 -d "*.example.com" --no-client
 
-DAYS_CA=3650      # CA证书有效期10年
-DAYS_SERVER=825   # 服务器证书有效期约2年(苹果/Chrome对自签证书有效期上限限制)
-DAYS_CLIENT=825   # 客户端证书有效期
-
-echo "========================================"
-echo "步骤1: 检查/生成本地根CA"
-echo "========================================"
-if [ -f "$CA_KEY" ] && [ -f "$CA_CRT" ]; then
-    echo "[提示] 检测到已有CA，复用现有CA(如需重新生成CA请先删除 $WORK_DIR 目录)"
-else
-    echo "生成CA私钥..."
-    openssl genrsa -out "$CA_KEY" 4096
-
-    echo "生成CA自签根证书..."
-    openssl req -x509 -new -nodes \
-        -key "$CA_KEY" \
-        -sha256 \
-        -days "$DAYS_CA" \
-        -subj "$CA_SUBJECT" \
-        -out "$CA_CRT"
-
-    echo "[OK] CA根证书生成完成: $CA_CRT"
-fi
-
-echo ""
-echo "========================================"
-echo "步骤2: 解析传入参数，区分域名和IP"
-echo "========================================"
-
-SAN_ENTRIES=""
-DNS_INDEX=1
-IP_INDEX=1
-FIRST_NAME="$1"   # 第一个参数作为证书CN和文件命名依据
-
-is_ip() {
-    local input="$1"
-    if [[ "$input" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        return 0
-    fi
-    if [[ "$input" =~ : ]]; then
-        return 0
-    fi
-    return 1
+注意：浏览器信任自签证书需手动导入 CA 证书（ca.crt）到"受信任的根证书颁发机构"。
+EOF
+    exit 0
 }
 
-for ARG in "$@"; do
-    if is_ip "$ARG"; then
-        SAN_ENTRIES="${SAN_ENTRIES}IP.${IP_INDEX} = ${ARG}\n"
-        IP_INDEX=$((IP_INDEX + 1))
-        echo "  识别为IP:   $ARG"
-    else
-        SAN_ENTRIES="${SAN_ENTRIES}DNS.${DNS_INDEX} = ${ARG}\n"
-        DNS_INDEX=$((DNS_INDEX + 1))
-        echo "  识别为域名: $ARG"
+log_info()  { echo -e "[INFO]  $*"; }
+log_warn()  { echo -e "[WARN]  $*" >&2; }
+log_error() { echo -e "[ERROR] $*" >&2; }
+
+# 检测 openssl 是否可用
+check_deps() {
+    if ! command -v openssl &>/dev/null; then
+        log_error "未找到 openssl，请先安装："
+        log_error "  Ubuntu/Debian: apt install openssl"
+        log_error "  CentOS/RHEL:   yum install openssl"
+        log_error "  macOS:         brew install openssl"
+        exit 1
     fi
-done
+}
 
-echo ""
-echo "========================================"
-echo "步骤3: 生成服务端私钥、CSR、证书"
-echo "========================================"
+# 生成本次签发使用的 CA 名称：Self-Signed CA + 随机字符串
+gen_ca_name() {
+    local suffix=""
+    suffix=$(openssl rand -hex 4 2>/dev/null) || suffix=""
+    if [ -z "$suffix" ]; then
+        suffix=$(printf "%04x%04x" "$RANDOM" "$RANDOM")
+    fi
+    CA_NAME="$CA_NAME_PREFIX $suffix"
+    log_info "本次 CA 名称: $CA_NAME"
+}
 
-openssl genrsa -out "$SERVER_KEY" 2048
+gen_ca() {
+    local ca_dir="$OUTPUT_DIR/ca"
+    local ca_key="$ca_dir/ca.key"
+    local ca_crt="$ca_dir/ca.crt"
+    local ca_cnf="$ca_dir/ca.cnf"
 
-openssl req -new \
-    -key "$SERVER_KEY" \
-    -subj "/C=CN/ST=Shanghai/L=Shanghai/O=Local Dev/OU=Sign/CN=${FIRST_NAME}" \
-    -out "$SERVER_CSR"
+    log_info "=== 生成 CA 根证书 ==="
 
-cat > "$SERVER_EXT" << EOF
-basicConstraints = CA:FALSE
-keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-extendedKeyUsage = serverAuth
-subjectAltName = @alt_names
+    # 每次签发生成新的随机 CA 名称
+    gen_ca_name
 
-[alt_names]
-$(echo -e "$SAN_ENTRIES")
-EOF
+    mkdir -p "$ca_dir"
 
-openssl x509 -req \
-    -in "$SERVER_CSR" \
-    -CA "$CA_CRT" \
-    -CAkey "$CA_KEY" \
-    -CAcreateserial \
-    -out "$SERVER_CRT" \
-    -days "$DAYS_SERVER" \
-    -sha256 \
-    -extfile "$SERVER_EXT"
+    # CA 配置文件
+    cat > "$ca_cnf" <<CNF
+[ req ]
+prompt                  = no
+distinguished_name      = req_distinguished_name
+x509_extensions         = v3_ca
 
-echo "[OK] 服务端证书签发完成: $SERVER_CRT"
+[ req_distinguished_name ]
+countryName             = CN
+stateOrProvinceName     = Beijing
+localityName            = Beijing
+organizationName        = ${CA_NAME}
+organizationalUnitName  = Development
+commonName              = ${CA_NAME}
 
-echo ""
-echo "========================================"
-echo "步骤4: 生成客户端私钥、CSR、证书(用于mTLS双向认证)"
-echo "========================================"
+[ v3_ca ]
+basicConstraints        = critical, CA:TRUE
+keyUsage                = critical, keyCertSign, cRLSign, digitalSignature
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid:always, issuer
+nsComment               = "${CA_NAME} - DO NOT TRUST IN PRODUCTION"
+CNF
 
-openssl genrsa -out "$CLIENT_KEY" 2048
+    # 生成 CA 私钥和自签名证书
+    openssl genrsa -out "$ca_key" "$KEY_SIZE"
+    log_info "CA 私钥已生成: $ca_key"
 
-openssl req -new \
-    -key "$CLIENT_KEY" \
-    -subj "/C=CN/ST=Shanghai/L=Shanghai/O=Local Dev Client/OU=Sign/CN=${FIRST_NAME}-client" \
-    -out "$CLIENT_CSR"
+    if [ -n "$CA_PASSWORD" ]; then
+        openssl req -x509 -new -key "$ca_key" \
+            -sha256 -days "$CA_DAYS" \
+            -config "$ca_cnf" \
+            -out "$ca_crt" \
+            -passout "pass:$CA_PASSWORD"
+    else
+        openssl req -x509 -new -key "$ca_key" \
+            -sha256 -days "$CA_DAYS" \
+            -config "$ca_cnf" \
+            -out "$ca_crt"
+    fi
+    log_info "CA 证书已生成: $ca_crt"
 
-# 客户端证书的关键区别: extendedKeyUsage 是 clientAuth 而不是 serverAuth
-cat > "$CLIENT_EXT" << EOF
-basicConstraints = CA:FALSE
-keyUsage = digitalSignature, keyEncipherment
-extendedKeyUsage = clientAuth
-EOF
+    # 显示指纹
+    log_info "CA 证书指纹 (SHA256):"
+    openssl x509 -in "$ca_crt" -fingerprint -sha256 -noout | cut -d= -f2
+}
 
-openssl x509 -req \
-    -in "$CLIENT_CSR" \
-    -CA "$CA_CRT" \
-    -CAkey "$CA_KEY" \
-    -CAcreateserial \
-    -out "$CLIENT_CRT" \
-    -days "$DAYS_CLIENT" \
-    -sha256 \
-    -extfile "$CLIENT_EXT"
+# 生成服务端证书
+gen_server_cert() {
+    local server_dir="$OUTPUT_DIR/server"
+    local server_key="$server_dir/server.key"
+    local server_csr="$server_dir/server.csr"
+    local server_crt="$server_dir/server.crt"
+    local server_cnf="$server_dir/server.cnf"
+    local ca_crt="$OUTPUT_DIR/ca/ca.crt"
+    local ca_key="$OUTPUT_DIR/ca/ca.key"
 
-echo "[OK] 客户端证书签发完成: $CLIENT_CRT"
+    log_info "=== 生成服务端证书 ==="
 
-echo ""
-echo "========================================"
-echo "步骤5: 把客户端证书打包成 .p12 (浏览器只能导入p12/pfx格式的客户端证书)"
-echo "========================================"
+    mkdir -p "$server_dir"
 
-openssl pkcs12 -export \
-    -inkey "$CLIENT_KEY" \
-    -in "$CLIENT_CRT" \
-    -certfile "$CA_CRT" \
-    -out "$CLIENT_P12" \
-    -passout "pass:${CLIENT_P12_PASSWORD}"
+    # 构建 SAN 列表
+    local san_list=""
+    local idx=0
+    for d in "${DOMAINS[@]}"; do
+        san_list+="DNS.$idx = $d"$'\n'
+        idx=$((idx + 1))
+    done
+    for ip in "${IPS[@]}"; do
+        san_list+="IP.$idx = $ip"$'\n'
+        idx=$((idx + 1))
+    done
 
-echo "[OK] 客户端p12证书生成完成: $CLIENT_P12 (导入密码: ${CLIENT_P12_PASSWORD})"
+    if [ -z "$san_list" ]; then
+        log_error "请至少指定一个域名或 IP（使用 --domain 或 --ip）"
+        exit 1
+    fi
 
-echo ""
-echo "========================================"
-echo "生成完成，文件清单"
-echo "========================================"
-echo "CA根证书(需要导入到浏览器/系统信任列表，用于信任服务端证书):"
-echo "  $CA_CRT"
-echo ""
-echo "服务端证书和私钥(配置到Nginx/Web服务器):"
-echo "  证书: $SERVER_CRT"
-echo "  私钥: $SERVER_KEY"
-echo ""
-echo "客户端证书(仅当服务端开启mTLS强制双向认证时才需要):"
-echo "  p12证书(导入浏览器用): $CLIENT_P12  (密码: ${CLIENT_P12_PASSWORD})"
-echo "  原始证书: $CLIENT_CRT"
-echo "  原始私钥: $CLIENT_KEY"
+    # 服务端证书配置文件（带 SAN）
+    cat > "$server_cnf" <<CNF
+[ req ]
+prompt                  = no
+distinguished_name      = req_distinguished_name
+req_extensions          = req_ext
+x509_extensions         = server_ext
 
-echo ""
-echo "========================================"
-echo "下一步1: 让浏览器信任CA(这一步必做，否则服务端证书依然会有警告)"
-echo "========================================"
-echo ""
-echo "【macOS】"
-echo "  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain $CA_CRT"
-echo ""
-echo "【Windows(用管理员PowerShell)】"
-echo "  Import-Certificate -FilePath \"$CA_CRT\" -CertStoreLocation Cert:\\LocalMachine\\Root"
-echo ""
-echo "【Linux (Ubuntu/Debian)】"
-echo "  sudo cp $CA_CRT /usr/local/share/ca-certificates/local-dev-ca.crt"
-echo "  sudo update-ca-certificates"
-echo ""
-echo "【Linux (CentOS/RHEL)】"
-echo "  sudo cp $CA_CRT /etc/pki/ca-trust/source/anchors/local-dev-ca.crt"
-echo "  sudo update-ca-trust"
-echo ""
-echo "【Firefox(独立证书库，需单独导入)】"
-echo "  设置 → 隐私与安全 → 证书 → 查看证书 → 颁发机构 → 导入 → 选择 $CA_CRT → 勾选信任用于识别网站"
-echo ""
-echo "========================================"
-echo "下一步2(可选，仅mTLS场景需要): 把客户端证书导入浏览器个人证书库"
-echo "========================================"
-echo ""
-echo "【macOS】双击 $CLIENT_P12，用钥匙串访问App导入，输入密码: ${CLIENT_P12_PASSWORD}"
-echo ""
-echo "【Windows】双击 $CLIENT_P12，走证书导入向导，输入密码: ${CLIENT_P12_PASSWORD}"
-echo "          存储位置选择\"个人\"证书存储"
-echo ""
-echo "【Chrome/Edge(Windows/Linux)】"
-echo "  设置 → 隐私设置和安全性 → 安全 → 管理证书 → 您的证书 → 导入 → 选择 $CLIENT_P12"
-echo ""
-echo "【Firefox】"
-echo "  设置 → 隐私与安全 → 证书 → 查看证书 → 您的证书 → 导入 → 选择 $CLIENT_P12"
-echo ""
-echo "导入完成后重启浏览器。如果服务端开启了mTLS强制校验，访问时浏览器会"
-echo "弹窗要求选择使用哪个客户端证书，选择刚导入的这个即可。"
-echo "========================================"
+[ req_distinguished_name ]
+countryName             = CN
+stateOrProvinceName     = Beijing
+localityName            = Beijing
+organizationName        = Self-Signed Server
+organizationalUnitName  = Development
+commonName              = ${DOMAINS[0]:-${IPS[0]}}
+
+[ req_ext ]
+subjectAltName          = @san
+
+[ server_ext ]
+basicConstraints        = critical, CA:FALSE
+keyUsage                = critical, digitalSignature, keyEncipherment
+extendedKeyUsage        = serverAuth, clientAuth
+subjectAltName          = @san
+authorityKeyIdentifier  = keyid:always, issuer
+
+[ san ]
+${san_list}
+CNF
+
+    # 生成服务端私钥
+    openssl genrsa -out "$server_key" "$KEY_SIZE"
+    log_info "服务端私钥已生成: $server_key"
+
+    # 生成 CSR
+    openssl req -new -key "$server_key" \
+        -config "$server_cnf" \
+        -sha256 -out "$server_csr"
+    log_info "服务端 CSR 已生成: $server_csr"
+
+    # 使用 CA 签发服务端证书
+    local ca_serial="$OUTPUT_DIR/ca/ca.srl"
+    [ -f "$ca_serial" ] || echo "$(openssl rand -hex 16)" > "$ca_serial"
+
+    if [ -n "$CA_PASSWORD" ]; then
+        openssl x509 -req \
+            -CA "$ca_crt" \
+            -CAkey "$ca_key" \
+            -CAserial "$ca_serial" \
+            -extfile "$server_cnf" \
+            -extensions server_ext \
+            -days "$SERVER_DAYS" \
+            -sha256 \
+            -in "$server_csr" \
+            -out "$server_crt" \
+            -passin "pass:$CA_PASSWORD"
+    else
+        openssl x509 -req \
+            -CA "$ca_crt" \
+            -CAkey "$ca_key" \
+            -CAserial "$ca_serial" \
+            -extfile "$server_cnf" \
+            -extensions server_ext \
+            -days "$SERVER_DAYS" \
+            -sha256 \
+            -in "$server_csr" \
+            -out "$server_crt"
+    fi
+    log_info "服务端证书已生成: $server_crt"
+
+    # 生成全链证书（服务端证书 + CA 证书）
+    cat "$server_crt" "$ca_crt" > "$server_dir/fullchain.crt"
+    log_info "全链证书已生成: $server_dir/fullchain.crt"
+
+    # 验证证书
+    log_info "验证服务端证书..."
+    openssl verify -CAfile "$ca_crt" "$server_crt" || log_warn "证书验证失败"
+}
+
+# 生成客户端证书
+gen_client_cert() {
+    local client_dir="$OUTPUT_DIR/client"
+    local client_key="$client_dir/client.key"
+    local client_csr="$client_dir/client.csr"
+    local client_crt="$client_dir/client.crt"
+    local client_pfx="$client_dir/client.pfx"
+    local client_cnf="$client_dir/client.cnf"
+    local ca_crt="$OUTPUT_DIR/ca/ca.crt"
+    local ca_key="$OUTPUT_DIR/ca/ca.key"
+
+    log_info "=== 生成客户端证书 ==="
+
+    mkdir -p "$client_dir"
+
+    # 客户端证书配置文件
+    cat > "$client_cnf" <<'CNF'
+[ req ]
+prompt                  = no
+distinguished_name      = req_distinguished_name
+req_extensions          = req_ext
+
+[ req_distinguished_name ]
+countryName             = CN
+stateOrProvinceName     = Beijing
+localityName            = Beijing
+organizationName        = Self-Signed Client
+organizationalUnitName  = Development
+commonName              = Client Certificate
+
+[ req_ext ]
+subjectAltName          = @san
+
+[ san ]
+DNS.0                   = client.local
+CNF
+
+    # 生成客户端私钥
+    openssl genrsa -out "$client_key" "$KEY_SIZE"
+    log_info "客户端私钥已生成: $client_key"
+
+    # 生成 CSR
+    openssl req -new -key "$client_key" \
+        -config "$client_cnf" \
+        -sha256 -out "$client_csr"
+    log_info "客户端 CSR 已生成: $client_csr"
+
+    # 使用 CA 签发客户端证书
+    local ca_serial="$OUTPUT_DIR/ca/ca.srl"
+    [ -f "$ca_serial" ] || echo "$(openssl rand -hex 16)" > "$ca_serial"
+
+    if [ -n "$CA_PASSWORD" ]; then
+        openssl x509 -req \
+            -CA "$ca_crt" \
+            -CAkey "$ca_key" \
+            -CAserial "$ca_serial" \
+            -days "$CLIENT_DAYS" \
+            -sha256 \
+            -in "$client_csr" \
+            -out "$client_crt" \
+            -passin "pass:$CA_PASSWORD"
+    else
+        openssl x509 -req \
+            -CA "$ca_crt" \
+            -CAkey "$ca_key" \
+            -CAserial "$ca_serial" \
+            -days "$CLIENT_DAYS" \
+            -sha256 \
+            -in "$client_csr" \
+            -out "$client_crt"
+    fi
+    log_info "客户端证书已生成: $client_crt"
+
+    # 生成 PKCS#12 格式（用于浏览器导入）
+    local pfx_pass_args=(-passout pass:)
+    openssl pkcs12 -export \
+        -inkey "$client_key" \
+        -in "$client_crt" \
+        -certfile "$ca_crt" \
+        -out "$client_pfx" \
+        "${pfx_pass_args[@]}"
+    log_info "客户端 PKCS#12 已生成: $client_pfx（无密码）"
+
+    # 验证证书
+    log_info "验证客户端证书..."
+    openssl verify -CAfile "$ca_crt" "$client_crt" || log_warn "客户端证书验证失败"
+}
+
+# 生成 Nginx 配置示例
+gen_nginx_example() {
+    local nginx_conf="$OUTPUT_DIR/nginx-ssl-example.conf"
+    local first_domain="${DOMAINS[0]:-}"
+    local server_name="$first_domain"
+    for d in "${DOMAINS[@]:1}"; do server_name+=" $d"; done
+    for ip in "${IPS[@]}"; do server_name+=" $ip"; done
+
+    cat > "$nginx_conf" <<CONF
+# Nginx SSL 配置示例
+# 请将此文件内容复制到你的 nginx 配置中
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${server_name:-localhost};
+
+    # 服务端证书（使用全链证书）
+    ssl_certificate     $(pwd)/$OUTPUT_DIR/server/fullchain.crt;
+    ssl_certificate_key $(pwd)/$OUTPUT_DIR/server/server.key;
+
+    # 可选：客户端证书验证（双向 TLS）
+    # ssl_client_certificate $(pwd)/$OUTPUT_DIR/ca/ca.crt;
+    # ssl_verify_client on;
+    # ssl_verify_depth 2;
+
+    # SSL 安全配置
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # HSTS（建议开启）
+    # add_header Strict-Transport-Security "max-age=63072000" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+CONF
+    log_info "Nginx 配置示例已生成: $nginx_conf"
+}
+
+# 生成使用说明
+gen_readme() {
+    local readme="$OUTPUT_DIR/README.txt"
+
+    cat > "$readme" <<TXT
+============================================
+  自签 Nginx SSL 证书 - 使用说明
+============================================
+
+本次签发的 CA 名称: ${CA_NAME}
+（每次运行都会生成新的随机 CA 名称，导入浏览器时可据此区分）
+
+证书文件说明:
+├── ca/
+│   ├── ca.crt          # CA 根证书（需导入浏览器信任）
+│   └── ca.key          # CA 私钥（妥善保管）
+├── server/
+│   ├── server.key      # 服务端私钥
+│   ├── server.crt      # 服务端证书
+│   ├── fullchain.crt   # 全链证书（server.crt + ca.crt）
+│   └── server.csr      # 证书签名请求（可忽略）
+TXT
+
+    if [ "$GEN_CLIENT" = true ]; then
+        cat >> "$readme" <<'TXT'
+├── client/
+│   ├── client.key      # 客户端私钥
+│   ├── client.crt      # 客户端证书
+│   ├── client.csr      # 证书签名请求（可忽略）
+│   └── client.pfx      # 客户端 PKCS#12（可导入浏览器/系统）
+TXT
+    fi
+
+    cat >> "$readme" <<TXT
+│
+└── nginx-ssl-example.conf  # Nginx 配置示例
+
+============================================
+  浏览器信任 CA 证书（消除安全警告）
+============================================
+
+方法一（推荐）：自动安装（仅限当前系统用户）
+  双击打开 ca.crt，选择"安装证书" -> "当前用户" -> "受信任的根证书颁发机构"
+
+方法二：命令行安装（需管理员/root 权限）
+  Windows:
+    certutil -addstore Root ca/ca.crt
+
+  macOS:
+    sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ca/ca.crt
+
+  Linux (Ubuntu/Debian):
+    sudo cp ca/ca.crt /usr/local/share/ca-certificates/self-signed-ca.crt
+    sudo update-ca-certificates
+
+  Linux (CentOS/RHEL):
+    sudo cp ca/ca.crt /etc/pki/ca-trust/source/anchors/
+    sudo update-ca-trust
+
+============================================
+  服务端配置
+============================================
+1. 将 server/fullchain.crt 和 server/server.key 配置到 Nginx
+2. 参考 nginx-ssl-example.conf 中的配置
+3. 重启 Nginx: nginx -s reload
+
+============================================
+  注意事项
+============================================
+- 此证书仅适用于开发/测试环境，请勿用于生产环境
+- CA 私钥（ca.key）请妥善保管，泄露后他人可签发伪造证书
+- 证书默认有效期 10 年，可通过脚本参数调整
+- 若使用客户端证书，需在 Nginx 中配置 ssl_verify_client on
+TXT
+    log_info "使用说明已生成: $readme"
+}
+
+# 打印证书信息摘要
+print_summary() {
+    log_info ""
+    log_info "============================================"
+    log_info "  证书生成完成！"
+    log_info "============================================"
+    log_info ""
+    log_info "输出目录: $(pwd)/$OUTPUT_DIR/"
+    log_info ""
+    log_info "CA 名称:       $CA_NAME"
+    log_info "CA 证书:       $OUTPUT_DIR/ca/ca.crt"
+    log_info "服务端证书:     $OUTPUT_DIR/server/fullchain.crt"
+    log_info "服务端私钥:     $OUTPUT_DIR/server/server.key"
+    log_info "Nginx 配置示例:  $OUTPUT_DIR/nginx-ssl-example.conf"
+    if [ "$GEN_CLIENT" = true ]; then
+        log_info "客户端证书:     $OUTPUT_DIR/client/client.crt"
+        log_info "客户端 PKCS#12: $OUTPUT_DIR/client/client.pfx"
+    fi
+    log_info ""
+    log_info "重要提示:"
+    log_info "  将 ca/ca.crt 导入浏览器受信任根证书颁发机构后，"
+    log_info "  浏览器将不再显示安全警告。"
+    log_info ""
+
+    log_info "CA 证书指纹 (SHA256):"
+    openssl x509 -in "$OUTPUT_DIR/ca/ca.crt" -fingerprint -sha256 -noout | cut -d= -f2
+}
+
+# ======================== 主流程 ========================
+main() {
+    # 解析命令行参数
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -d|--domain)
+                DOMAINS+=("$2")
+                shift 2
+                ;;
+            -i|--ip)
+                IPS+=("$2")
+                shift 2
+                ;;
+            -c|--client)
+                # 默认已包含客户端证书，此选项保留兼容
+                shift
+                ;;
+            --no-client)
+                GEN_CLIENT=false
+                shift
+                ;;
+            -o|--output)
+                OUTPUT_DIR="$2"
+                shift 2
+                ;;
+            --ca-password)
+                CA_PASSWORD="$2"
+                shift 2
+                ;;
+            --no-ca-password)
+                CA_PASSWORD=""
+                shift
+                ;;
+            -h|--help)
+                usage
+                ;;
+            *)
+                log_error "未知选项: $1"
+                usage
+                ;;
+        esac
+    done
+
+    # 检查依赖
+    check_deps
+
+    # 验证参数：至少需要一个域名或 IP
+    if [ ${#DOMAINS[@]} -eq 0 ] && [ ${#IPS[@]} -eq 0 ]; then
+        log_error "请至少指定一个域名或 IP 地址"
+        log_error "  使用 --domain <域名> 或 --ip <IP地址>"
+        usage
+    fi
+
+    # 清理并创建输出目录
+    rm -rf "$OUTPUT_DIR"
+
+    # 生成 CA
+    gen_ca
+
+    # 生成服务端证书
+    gen_server_cert
+
+    # 生成客户端证书（可选）
+    if [ "$GEN_CLIENT" = true ]; then
+        gen_client_cert
+    fi
+
+    # 生成 Nginx 配置示例
+    gen_nginx_example
+
+    # 生成使用说明
+    gen_readme
+
+    # 打印摘要
+    print_summary
+}
+
+main "$@"
+
+
 
 ```
 
