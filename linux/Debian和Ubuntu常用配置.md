@@ -272,7 +272,7 @@ iface lo inet loopback
 # The primary network interface
 allow-hotplug ens192
 iface ens192 inet dhcp
-
+iface ens192 inet6 auto
 ```
 
 #### 确认 DNS 配置生效方式
