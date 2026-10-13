@@ -338,6 +338,26 @@ http://archive.ubuntu.com/ubuntu
 
 ### 推荐国内镜像站
 
+#### 官方镜像源
+
+```bash
+cat > /etc/apt/sources.list.d/debian.sources <<'EOF'
+Types: deb
+URIs: https://deb.debian.org/debian
+Suites: trixie trixie-updates
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: https://security.debian.org/debian-security
+Suites: trixie-security
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+```
+
+
+
 #### ustc中科大
 
 [ustc中科大Ubuntu各版本镜像源配置链接](https://mirrors.ustc.edu.cn/help/ubuntu.html#_7)
